@@ -184,6 +184,7 @@ class SerialTransport:
         self._serial: Any = None
         self._sequence = 1
         self.max_payload = DEFAULT_MAX_PAYLOAD
+        self.package_capacity = 0
 
     def open(self) -> None:
         if self._serial is not None and getattr(self._serial, "is_open", False):
@@ -357,6 +358,7 @@ class SerialTransport:
                 if info["version"] != VERSION or not 64 <= info["max_payload"] <= MAX_PAYLOAD:
                     raise ProtocolError(f"unsupported device capabilities: {info}")
                 self.max_payload = info["max_payload"]
+                self.package_capacity = info["package_capacity"]
                 return info
             except (TransportError, TimeoutError) as exc:
                 last = exc

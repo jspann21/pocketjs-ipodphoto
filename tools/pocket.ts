@@ -6,6 +6,7 @@
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { parseArgs } from "node:util";
 import { checkAppTypes } from "../framework/compiler/app-check.ts";
 import { depfile } from "../framework/compiler/build-inputs.ts";
 import type { PocketTargetId } from "../contracts/spec/platforms.ts";
@@ -250,7 +251,21 @@ const targetBackends = {
         `(hosts/pocketbook, cargo zigbuild) and copy both to the device.`,
     );
   },
-  "ipod-photo": async ({ plan, manifestPath, outdir }) => {
+  "ipod-photo": async ({ plan, manifestPath, outdir, args }) => {
+    const { values } = parseArgs({
+      args: [...args],
+      options: {
+        run: { type: "boolean" },
+        port: { type: "string" },
+        repeat: { type: "string" },
+        settle: { type: "string" },
+      },
+      strict: true,
+      allowPositionals: false,
+    });
+    if (!values.run && (values.port !== undefined || values.repeat !== undefined || values.settle !== undefined)) {
+      throw new Error("iPod Photo --port, --repeat and --settle require --run");
+    }
     // iPod photo uses the ordinary compiler output directly. Package the
     // single admitted target variant here so `pocket build` is the same
     // compiler/packer path as `pocket-pack build`, without pretending this
@@ -268,6 +283,19 @@ const targetBackends = {
     const bytes = encodeTargetPackage({ manifest, plan, js, pak });
     await Bun.write(packagePath, bytes);
     console.log(`✓ iPod Photo package ready in ${packagePath} (${bytes.length}B)`);
+    if (values.run) {
+      const pyLauncher = process.platform === "win32" ? Bun.which("py") : null;
+      const python = pyLauncher ?? Bun.which("python3") ?? Bun.which("python");
+      if (!python) throw new Error("iPod Photo USB runs require Python 3 and pyserial");
+      await run([
+        python,
+        ...(pyLauncher ? ["-3"] : []),
+        resolve(frameworkRoot, "hosts/ipod-photo/tools/ipod_usb_runner.py"),
+        "batch", "--batch-package", packagePath, "--maintenance-auto", "--noninteractive",
+        ...(["port", "repeat", "settle"] as const).flatMap((name) =>
+          values[name] !== undefined ? [`--${name}`, values[name]!] : []),
+      ], "iPod Photo USB run");
+    }
   },
 } satisfies Record<PocketTargetId, TargetBackend>;
 

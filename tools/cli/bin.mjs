@@ -41,6 +41,18 @@ const run = (cmd, args) => {
   return r.status === 0 ? r.stdout.trim() : null;
 };
 
+function bunCommand() {
+  if (process.versions.bun) return process.execPath;
+  const executable = which("bun");
+  if (executable && platform() === "win32") {
+    // npm installs Bun behind shell shims. Spawn the bundled executable so
+    // Windows needs no shell and preserves the backend `--` separator.
+    const npmBun = join(dirname(executable), "node_modules/bun/bin/bun.exe");
+    if (existsSync(npmBun)) return npmBun;
+  }
+  return executable;
+}
+
 // ---------------------------------------------------------------------------
 // Checkout discovery
 // ---------------------------------------------------------------------------
@@ -304,7 +316,7 @@ async function setup() {
 // create
 // ---------------------------------------------------------------------------
 
-const APP_TSX = (title) => `// ${title} — scaffolded by \`pocket create\`.
+const APP_TSX = (title, target) => `// ${title} — scaffolded by \`pocket create\`.
 import { createSignal } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
 import { onButtonPress } from "@pocketjs/framework/lifecycle";
@@ -312,12 +324,12 @@ import { BTN } from "@pocketjs/framework/input";
 
 export default function App() {
   const [count, setCount] = createSignal(0);
-  onButtonPress(BTN.CROSS, () => setCount((n) => n + 1));
+  onButtonPress(BTN.${target === "ipod-photo" ? "CIRCLE" : "CROSS"}, () => setCount((n) => n + 1));
   return (
     <View class="w-full h-full flex-col items-center justify-center gap-4 bg-slate-950">
       <View class="w-[48] h-[48] rounded-[12px] bg-indigo-500 animate-spin" />
       <Text class="text-xl text-white font-bold">{\`Count: \${count()}\`}</Text>
-      <Text class="text-sm text-slate-400">Press CROSS (Z / Enter) to count</Text>
+      <Text class="text-sm text-slate-400">${target === "ipod-photo" ? "Press Center to count" : "Press CROSS (Z / Enter) to count"}</Text>
     </View>
   );
 }
@@ -330,7 +342,7 @@ import { mount } from "@pocketjs/framework/solid";
 mount(() => <App />);
 `;
 
-const MANIFEST = (name, title) => ({
+const MANIFEST = (name, title, target) => ({
   $schema: "https://pocketjs.dev/schema/pocket-2.json",
   pocket: 2,
   id: `dev.example.${name.replace(/-/g, ".")}`,
@@ -346,14 +358,21 @@ const MANIFEST = (name, title) => ({
     entry: "main.tsx",
     output: `${name}-main`,
     framework: "solid",
-    viewport: {
+    viewport: target === "ipod-photo" ? {
+      fixed: { logical: [220, 176], presentation: "native" },
+    } : {
       logical: [480, 272],
       presentation: "integer-fit",
     },
   },
 });
 
-function create(name) {
+function create(name, options = []) {
+  const target = options.length === 2 && options[0] === "--target" ? options[1] : undefined;
+  if ((options.length && !target) || (target && !["psp", "vita", "ipod-photo"].includes(target))) {
+    console.error(C.bad("usage: pocket create <name> [--target psp|vita|ipod-photo]"));
+    process.exit(1);
+  }
   if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) {
     console.error(C.bad("usage: pocket create <kebab-case-name>"));
     process.exit(1);
@@ -370,10 +389,14 @@ function create(name) {
   }
   const title = name.replace(/-/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "app.tsx"), APP_TSX(title));
+  writeFileSync(join(dir, "app.tsx"), APP_TSX(title, target));
   writeFileSync(join(dir, "main.tsx"), MAIN_TSX(title));
-  writeFileSync(join(dir, "pocket.json"), JSON.stringify(MANIFEST(name, title), null, 2) + "\n");
+  writeFileSync(join(dir, "pocket.json"), JSON.stringify(MANIFEST(name, title, target), null, 2) + "\n");
   console.log(C.ok(`apps/${name} scaffolded`));
+  if (target === "ipod-photo") {
+    console.log(C.dim(`  pocket build --target ipod-photo --manifest apps/${name}/pocket.json -- --run`));
+    return;
+  }
   console.log(C.dim(`  pocket check --target psp --manifest apps/${name}/pocket.json`));
   console.log(C.dim(`  pocket build --target psp --manifest apps/${name}/pocket.json -- --release`));
   console.log(C.dim(`  pocket build --target vita --manifest apps/${name}/pocket.json -- --release`));
@@ -406,11 +429,12 @@ function manifestCommand(cmd, args) {
     ));
     process.exit(1);
   }
-  if (!which("bun")) {
+  const bun = bunCommand();
+  if (!bun) {
     console.error(C.bad("bun not found — install Bun to compile an application package"));
     process.exit(1);
   }
-  const r = spawnSync("bun", [join(root, "tools/pocket.ts"), cmd, ...args], {
+  const r = spawnSync(bun, [join(root, "tools/pocket.ts"), cmd, ...args], {
     stdio: "inherit",
     cwd: process.cwd(),
   });
@@ -444,7 +468,8 @@ const HELP = `${C.bold("pocket")} — the PocketJS toolchain CLI
 
   pocket doctor            diagnose bun / Rust / PSP toolchain / PSPLINK
   pocket setup [--yes]     install what doctor found missing
-  pocket create <name>     scaffold a pocket.json v2 app under apps/<name>
+  pocket create <name> [--target ipod-photo]
+                           scaffold a pocket.json v2 app under apps/<name>
   pocket check --target T  validate pocket.json, target APIs and app types
   pocket check --host-profile FILE
                            validate against an ESP-IDF product host
@@ -474,7 +499,7 @@ switch (cmd) {
     await setup();
     break;
   case "create":
-    create(rest[0]);
+    create(rest[0], rest.slice(1));
     break;
   case "check":
   case "compile":

@@ -524,9 +524,12 @@ class IpodRunner:
         if self.args.repeat > 1:
             cases = [(f"{iteration + 1}/{name}", package)
                      for iteration in range(self.args.repeat) for name, package in cases]
+        needs_maintenance = self.args.maintenance_once or (
+            self.args.maintenance_auto and self.transport is not None and
+            self.transport.package_capacity < 4 * 1024 * 1024)
         self.emit({"type": "batch", "status": "started", "cases": [name for name, _ in cases],
-                   "maintenance": bool(self.args.maintenance_once), "port": self.args.port})
-        if self.args.maintenance_once:
+                   "maintenance": bool(needs_maintenance), "port": self.args.port})
+        if needs_maintenance:
             try:
                 self.enter_maintenance()
             except (TransportError, TimeoutError, ProtocolError, PromptRequired, OSError, ValueError) as exc:
@@ -680,6 +683,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="JSONL path for batch records (default: timestamped file under hosts/ipod-photo/build/usb)")
     p.add_argument("--maintenance-once", "--maintenance", dest="maintenance_once",
                    action="store_true", help="enter RAM maintenance once before the batch")
+    p.add_argument("--maintenance-auto", action="store_true",
+                   help="enter maintenance only when the batch connects to the resident observer")
     return p
 
 
