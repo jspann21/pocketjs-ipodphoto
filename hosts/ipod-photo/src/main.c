@@ -94,7 +94,15 @@ extern const uint8_t pjs_embedded_package[];
 extern const uint32_t pjs_embedded_package_length;
 
 static uint16_t framebuffer[PJS_FRAME_PIXELS] __attribute__((aligned(16)));
+static bool status_hold, presented_hold;
 static uint32_t last_presented_damage_area;
+
+static void poll_system_input(PjsInputState *input)
+{
+    input_poll(input);
+    status_hold = input->hold;
+}
+
 static PjsUsbPerformance observed_performance;
 static void idle_until_service(void)
 {
@@ -321,6 +329,32 @@ static uint32_t render_and_present(void)
     if (pjs_core_render_damage(framebuffer, (uint32_t)PJS_FRAME_PIXELS, &damage) != 0) {
         panic_code(0x50314333u); /* P1C3 */
     }
+    /* Composite the system lock in the status bar without changing the
+     * renderer's retained pixels. Unlock restores the app beneath it. */
+    uint16_t beneath[12u * 12u];
+    if (status_hold) {
+        for (uint32_t y = 0u; y < 12u; ++y)
+            for (uint32_t x = 0u; x < 12u; ++x) {
+                uint32_t at = (y + 6u) * 220u + x + 104u;
+                beneath[y * 12u + x] = framebuffer[at];
+                bool shackle = y < 6u && x >= 3u && x <= 8u &&
+                    (y < 2u || x < 5u || x > 6u);
+                bool body = y >= 5u && y <= 10u && x >= 1u && x <= 10u;
+                bool keyhole = x >= 5u && x <= 6u && y >= 7u && y <= 9u;
+                if (shackle || body) framebuffer[at] = keyhole ? 0xffffu : 0x18e3u;
+            }
+    }
+    if (status_hold != presented_hold) {
+        if (damage.count < PJS_CORE_MAX_DAMAGE_REGIONS) {
+            damage.regions[damage.count++] = (PjsCoreDamageRect){104, 6, 116, 18};
+            damage.area += 144u;
+        } else {
+            damage.count = 1u;
+            damage.full_redraw = 1u;
+            damage.area = PJS_FRAME_PIXELS;
+            damage.regions[0] = (PjsCoreDamageRect){0, 0, 220, 176};
+        }
+    }
     observed_performance.render_us = timer_now_us() - started;
     pjs_audio_stream_gate_refill();
     uint32_t lcd_started = timer_now_us();
@@ -334,6 +368,11 @@ static uint32_t render_and_present(void)
         last_presented_damage_area = damage.area;
         ++observed_performance.present_count;
     }
+    if (status_hold)
+        for (uint32_t y = 0u; y < 12u; ++y)
+            for (uint32_t x = 0u; x < 12u; ++x)
+                framebuffer[(y + 6u) * 220u + x + 104u] = beneath[y * 12u + x];
+    presented_hold = status_hold;
     observed_performance.lcd_us = timer_now_us() - lcd_started;
     uint32_t elapsed = timer_now_us() - started;
     observed_performance.last_present_us = elapsed;
@@ -469,6 +508,7 @@ static bool kernel_resume(PjsPowerLifecycle *lifecycle,
     }
     power_lifecycle_set_suspended(lifecycle, false);
     ++batch_diagnostics.wakes;
+    presented_hold = !status_hold; /* Restore the overlay after the LCD wake copy. */
     backlight_resume();
     return true;
 }
@@ -492,6 +532,43 @@ static bool kernel_shutdown_storage(PjsLineageState *lineage,
     if (pjs_storage_disk_flush(disk_power) != PJS_STORAGE_OK) return false;
     if (pjs_storage_disk_standby(disk_power) != PJS_STORAGE_OK) return false;
     return pjs_storage_disk_power_off(disk_power) == PJS_STORAGE_OK;
+}
+
+/* Play alone for two seconds is system shutdown in Apps and guest runtimes.
+ * Flush while the runtime is still intact; a failed preflight keeps it alive. */
+static void system_shutdown_key(const PjsInputState *input, uint32_t now,
+                                uint32_t *started, bool *fired,
+                                PjsLineageState *lineage,
+                                PjsStorageDiskPower *disk, PjsAudioState *audio,
+                                uint8_t sources)
+{
+    if (input->hold || input->buttons != PJS_BUTTON_PLAY) {
+        *started = 0u;
+        *fired = false;
+        return;
+    }
+    if (*fired) return;
+    if (*started == 0u) { *started = now; return; }
+    if ((uint32_t)(now - *started) < PJS_POWER_CHORD_HOLD_US) return;
+    *fired = true;
+    if (pjs_audio_pcm_reset() != 0 || !kernel_shutdown_storage(lineage, disk, audio)) {
+        pjs_core_set_kernel_diagnostic(8u, 75u);
+        return;
+    }
+    qjs_runtime_shutdown();
+    pjs_core_shutdown();
+    timer_irq_stop();
+    irq_disable_global();
+    pjs_usb_device_shutdown();
+    backlight_suspend();
+    (void)lcd_sleep();
+    (void)power_charger_set_mode(PJS_POWER_CHARGER_SUSPEND);
+    /* CHGWAK would immediately wake an iPod whose USB cable is attached. */
+    uint8_t wake = PJS_POWER_WAKE_EXTERNAL;
+    if (sources & PJS_POWER_USB) wake &= ~PJS_POWER_WAKE_USB;
+    for (uint32_t attempt = 0u; attempt < 3u; ++attempt)
+        if (power_request_standby(wake) == PJS_POWER_RESULT_OK) break;
+    for (;;) PP_CPU_CTL = PP_PROC_SLEEP;
 }
 
 static void kernel_stop_runtime(PjsStorageFile *disk_package,
@@ -626,7 +703,7 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
                                     PjsPowerTelemetry *power,
                                     bool cache_enabled
                                     , PjsUsbProtocol *observer, bool usb_started,
-                                    uint32_t *observed_epoch
+                                    uint32_t *observed_epoch, PjsLineageState *lineage
                                     )
 {
     uint8_t labels[PJS_STORAGE_MAX_APPS][9];
@@ -657,6 +734,8 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
     int32_t pending_wheel_delta = 0;
     uint32_t last_frame_us = 0u;
     uint32_t next_frame = timer_now_us();
+    uint32_t shutdown_key_start = 0u;
+    bool shutdown_key_fired = false;
     uint32_t exit_chord_start = 0u;
     uint32_t now = timer_now_us();
     PjsPowerLifecycle launcher_lifecycle;
@@ -709,7 +788,7 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
                 }
             }
         }
-        input_poll(input);
+        poll_system_input(input);
         now = timer_now_us();
         if ((int32_t)(now - launcher_next_power_sample) >= 0) {
             if (!launcher_power_initialized) {
@@ -791,6 +870,8 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
             /* Do not retry a failed suspend on every launcher frame. */
             launcher_last_activity = now;
         }
+        system_shutdown_key(input, now, &shutdown_key_start, &shutdown_key_fired,
+                            lineage, &launcher_disk_power, 0, power->flags);
         pending_wheel_delta = clamp_wheel_delta(
             pending_wheel_delta + (int32_t)input->wheel_delta);
         now = timer_now_us();
@@ -828,9 +909,9 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
         if (observed_performance.last_frame_us > observed_performance.max_frame_us)
             observed_performance.max_frame_us = observed_performance.last_frame_us;
         int32_t selection = qjs_runtime_launcher_selection();
-        if (pjs_core_needs_render() != 0u) last_frame_us = render_and_present();
+        if (pjs_core_needs_render() != 0u || status_hold != presented_hold) last_frame_us = render_and_present();
         /* Consume the launch gesture before the next guest installs handlers. */
-        if (selection < 0 || input->buttons != 0u || input->wheel_touched) continue;
+        if (selection < 0 || input->hold || input->buttons != 0u || input->wheel_touched) continue;
 
         uint32_t teardown_started = timer_now_us();
         qjs_runtime_shutdown();
@@ -943,7 +1024,7 @@ boot_apps:
     PjsStorageFile disk_package = {0};
     PjsGuestPackage guest = {0};
     PjsInputState input = {0};
-    input_poll(&input);
+    poll_system_input(&input);
     PjsScheduler initial_scheduler = {0};
     PjsCoreInput initial_input = core_input(
         &input, &power, &initial_scheduler, 0, cache_enabled, 0u,
@@ -1002,7 +1083,7 @@ boot_apps:
             }
             int32_t selection = run_package_launcher(
                 &launcher_catalog, &input, &power, cache_enabled
-                , &usb_protocol, usb_started, &observed_usb_epoch
+                , &usb_protocol, usb_started, &observed_usb_epoch, &lineage
                 );
             if (selection == -2) {
                 launcher_maintenance_pending = true;
@@ -1044,7 +1125,7 @@ boot_apps:
         candidate_add(candidates, &source_count,
                       PJS_BOOT_SOURCE_EMBEDDED, 0u, 0u, -1);
 
-        input_poll(&input);
+        poll_system_input(&input);
         initial_input = core_input(&input, &power, &initial_scheduler,
                                    0, cache_enabled, 0u,
                                    PJS_RUNTIME_PACKAGE_ADMITTED);
@@ -1324,6 +1405,8 @@ boot_apps:
     PjsStorageDiskPower disk_power = {0};
 
     int32_t pending_wheel_delta = 0;
+    uint32_t shutdown_key_start = 0u;
+    bool shutdown_key_fired = false;
     uint32_t exit_chord_start = 0u;
     uint32_t now = timer_now_us();
     uint32_t next_power_sample = now + 250000u;
@@ -1497,10 +1580,13 @@ boot_apps:
         }
         /* This path remains hot while no frame is required. It samples input
          * continuously and preserves wheel motion until the next fixed step. */
-        input_poll(&input);
+        poll_system_input(&input);
         bool buttons_changed = input.buttons != previous_buttons;
         uint32_t pressed = input.buttons & ~previous_buttons;
         previous_buttons = input.buttons;
+        if (lifecycle.suspended == 0u)
+            system_shutdown_key(&input, now, &shutdown_key_start, &shutdown_key_fired,
+                                &lineage, &disk_power, &audio, power.flags);
         bool hold_changed = input.hold != previous_hold;
         previous_hold = input.hold;
         if (lifecycle.suspended == 0u &&
@@ -1954,7 +2040,7 @@ boot_apps:
         }
 
         now = timer_now_us();
-        if (pjs_core_needs_render() == 0u ||
+        if ((pjs_core_needs_render() == 0u && status_hold == presented_hold) ||
             (int32_t)(now - next_present) < 0) {
             if (steps == 0u) idle_until_service();
             continue;

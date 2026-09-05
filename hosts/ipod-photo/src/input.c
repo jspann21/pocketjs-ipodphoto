@@ -86,6 +86,14 @@ void input_poll(PjsInputState *state)
         }
     }
 
+    /* Suppress input at the hardware boundary, including native shortcuts.
+     * Unlock must not replay a cached press or wheel displacement. */
+    if (next.hold || next.hold != last_state.hold) {
+        next.buttons = 0u;
+        next.wheel_delta = 0;
+        next.wheel_touched = false;
+        previous_wheel = -1;
+    }
     last_state = next;
     *state = next;
 }
