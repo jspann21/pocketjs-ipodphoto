@@ -289,8 +289,7 @@ void pjs_usb_protocol_set_commit_callback(PjsUsbProtocol *p, void *context,
                                            PjsUsbPackageCommitFn callback);
 bool pjs_usb_protocol_take_reboot_request(PjsUsbProtocol *p);
 
-/* Publish observer-only startup/frame timing. The values are appended to
- * INFO replies only when observe_only is enabled. */
+/* Publish startup/frame timing for resident and RAM-maintenance runtimes. */
 void pjs_usb_protocol_publish_performance(PjsUsbProtocol *p,
                                           const PjsUsbPerformance *performance);
 

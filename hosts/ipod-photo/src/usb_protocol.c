@@ -442,7 +442,7 @@ static bool handle_frame(PjsUsbProtocol *p, const uint8_t *frame,
                      p->runtime_error_text_length);
         }
         uint32_t extra_length = 104u + p->runtime_error_text_length;
-        if (p->config.observe_only) {
+        if (p->config.observe_only || p->maintenance_active) {
             put_u32(extra + extra_length,
                     PJS_USB_PERFORMANCE_TRAILER_MARKER);
             const uint32_t values[10] = {
@@ -1143,7 +1143,8 @@ void pjs_usb_protocol_publish_observation(PjsUsbProtocol *p,
 void pjs_usb_protocol_publish_performance(PjsUsbProtocol *p,
                                           const PjsUsbPerformance *performance)
 {
-    if (p == 0 || performance == 0 || !p->config.observe_only) return;
+    if (p == 0 || performance == 0 ||
+        (!p->config.observe_only && !p->maintenance_active)) return;
     p->performance = *performance;
 }
 

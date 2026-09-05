@@ -795,6 +795,7 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
             input, power, &scheduler, pending_wheel_delta, cache_enabled,
             last_frame_us, PJS_RUNTIME_READY_DISK);
         pending_wheel_delta = 0;
+        uint32_t frame_started = timer_now_us();
         if (!qjs_runtime_frame(&frame_input) || pjs_core_step(&frame_input) < 0) {
             qjs_runtime_shutdown();
             pjs_storage_release(&launcher_file);
@@ -803,6 +804,9 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
             return -1;
         }
         ++launcher_frames;
+        observed_performance.last_frame_us = timer_now_us() - frame_started;
+        if (observed_performance.last_frame_us > observed_performance.max_frame_us)
+            observed_performance.max_frame_us = observed_performance.last_frame_us;
         int32_t selection = qjs_runtime_launcher_selection();
         if (pjs_core_needs_render() != 0u) last_frame_us = render_and_present();
         next_frame = timer_now_us() + 16667u;

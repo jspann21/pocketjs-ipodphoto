@@ -13,11 +13,10 @@
 #define LCD_STATE_READY 0x4c43444fu
 #define LCD_STATE_ASLEEP 0x4c434453u
 #define LCD_MAX_BLOCK_BYTES 0x10000u
-#define LCD_STAGING_PIXELS (LCD_MAX_BLOCK_BYTES / 2u)
+#define LCD_BLOCK_PIXELS (LCD_MAX_BLOCK_BYTES / 2u)
 
 static uint32_t lcd_state = LCD_STATE_COLD;
 static uint8_t panel_type;
-static uint16_t region_staging[LCD_STAGING_PIXELS] __attribute__((aligned(16)));
 
 static bool wait_port(void)
 {
@@ -113,30 +112,37 @@ static bool setup_region(uint32_t x, uint32_t y, uint32_t width, uint32_t height
     return true;
 }
 
-static bool transfer_contiguous(const uint16_t *pixels, uint32_t pixel_count)
+static bool transfer_rows(const uint16_t *pixels, uint32_t width,
+                          uint32_t rows, uint32_t stride)
 {
-    if (pixels == 0 || pixel_count == 0u || pixel_count > LCD_STAGING_PIXELS ||
-        (pixel_count & 1u) != 0u || (((uintptr_t)pixels) & 3u) != 0u) {
+    if (pixels == 0 || width == 0u || rows == 0u ||
+        width > LCD_BLOCK_PIXELS || rows > LCD_BLOCK_PIXELS / width ||
+        stride < width || ((width | stride) & 1u) != 0u ||
+        (((uintptr_t)pixels) & 3u) != 0u) {
         return false;
     }
 
-    uint32_t byte_count = pixel_count * 2u;
+    uint32_t byte_count = width * rows * 2u;
     const uint32_t *words = (const uint32_t *)(const void *)pixels;
-    uint32_t word_count = pixel_count / 2u;
+    uint32_t word_count = width / 2u;
+    uint32_t refill_words = 0u;
 
     PP_LCD2_BLOCK_CTRL = 0x10000080u;
     PP_LCD2_BLOCK_CONFIG = 0xc0010000u | (byte_count - 1u);
     PP_LCD2_BLOCK_CTRL = 0x34000000u;
 
-    for (uint32_t index = 0u; index < word_count; ++index) {
-        /* Display transfer is synchronous CPU work. Keep the native producer
-         * fed every 2 KiB without calling codec, guest, or rendering code. */
-        if ((index & 511u) == 0u) pjs_audio_stream_gate_refill();
-        if (!wait_block(PP_LCD2_BLOCK_TXOK)) {
-            PP_LCD2_BLOCK_CONFIG = 0u;
-            return false;
+    for (uint32_t row = 0u; row < rows; ++row) {
+        for (uint32_t index = 0u; index < word_count; ++index) {
+            /* Keep the native audio producer fed every 2 KiB without
+             * calling codec, guest, or rendering code. */
+            if ((refill_words++ & 511u) == 0u) pjs_audio_stream_gate_refill();
+            if (!wait_block(PP_LCD2_BLOCK_TXOK)) {
+                PP_LCD2_BLOCK_CONFIG = 0u;
+                return false;
+            }
+            PP_LCD2_BLOCK_DATA = words[index];
         }
-        PP_LCD2_BLOCK_DATA = words[index];
+        words += stride / 2u;
     }
 
     if (!wait_block(PP_LCD2_BLOCK_READY)) {
@@ -156,7 +162,7 @@ static bool present_full(const uint16_t *pixels)
     while (rows_left != 0u) {
         uint32_t rows = rows_left > 148u ? 148u : rows_left;
         uint32_t count = PJS_LCD_WIDTH * rows;
-        if (!transfer_contiguous(source, count)) return false;
+        if (!transfer_rows(source, PJS_LCD_WIDTH, rows, PJS_LCD_WIDTH)) return false;
         source += count;
         rows_left -= rows;
     }
@@ -177,18 +183,18 @@ static bool present_region(const uint16_t *pixels, const PjsCoreDamageRect *regi
     uint32_t y = (uint32_t)region->y0;
     uint32_t width = (uint32_t)(region->x1 - region->x0);
     uint32_t height = (uint32_t)(region->y1 - region->y0);
-    uint32_t count = width * height;
-    if (count == 0u || count > LCD_STAGING_PIXELS) return false;
-
-    uint16_t *out = region_staging;
-    for (uint32_t row = 0u; row < height; ++row) {
-        const uint16_t *in = pixels + (size_t)(y + row) * PJS_LCD_WIDTH + x;
-        for (uint32_t column = 0u; column < width; ++column) {
-            *out++ = in[column];
-        }
+    if (!setup_region(x, y, width, height)) return false;
+    /* The LCD bridge consumes CPU-written pixel pairs, so aligned rows can
+     * come directly from the cached framebuffer, as in Rockbox Photo. */
+    const uint16_t *source = pixels + (size_t)y * PJS_LCD_WIDTH + x;
+    while (height != 0u) {
+        uint32_t rows = LCD_BLOCK_PIXELS / width;
+        if (rows > height) rows = height;
+        if (!transfer_rows(source, width, rows, PJS_LCD_WIDTH)) return false;
+        source += (size_t)rows * PJS_LCD_WIDTH;
+        height -= rows;
     }
-
-    return setup_region(x, y, width, height) && transfer_contiguous(region_staging, count);
+    return true;
 }
 
 bool lcd_init(void)
