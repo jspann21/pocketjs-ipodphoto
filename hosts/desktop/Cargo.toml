@@ -29,3 +29,5 @@ env_logger = "0.11"
 
 [profile.release]
 debug = false
+[patch.crates-io]
+grid = { path = "../../vendor/grid-0.18.0" }
