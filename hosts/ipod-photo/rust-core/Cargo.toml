@@ -18,7 +18,7 @@ pocketjs-core = { path = "../../../engine/core" }
 
 [profile.release]
 panic = "abort"
-opt-level = "z"
+opt-level = 2
 lto = "fat"
 codegen-units = 1
 strip = false

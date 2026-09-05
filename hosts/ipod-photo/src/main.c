@@ -6,6 +6,7 @@
 #include "audio_dma.h"
 #include "cache.h"
 #include "core_bridge.h"
+#include "cpu_idle.h"
 #include "heap.h"
 #include "input.h"
 #include "irq.h"
@@ -95,6 +96,13 @@ extern const uint32_t pjs_embedded_package_length;
 static uint16_t framebuffer[PJS_FRAME_PIXELS] __attribute__((aligned(16)));
 static uint32_t last_presented_damage_area;
 static PjsUsbPerformance observed_performance;
+static void idle_until_service(void)
+{
+    if (pjs_usb_cdc_configured() &&
+        (pjs_usb_cdc_rx_available() != 0u || !pjs_usb_cdc_tx_idle())) return;
+    pjs_audio_stream_gate_refill();
+    cpu_idle_wait();
+}
 static volatile uint32_t *stack_guard;
 static volatile uint32_t *heap_guard;
 
@@ -313,7 +321,9 @@ static uint32_t render_and_present(void)
     if (pjs_core_render_damage(framebuffer, (uint32_t)PJS_FRAME_PIXELS, &damage) != 0) {
         panic_code(0x50314333u); /* P1C3 */
     }
+    observed_performance.render_us = timer_now_us() - started;
     pjs_audio_stream_gate_refill();
+    uint32_t lcd_started = timer_now_us();
     if (damage.count != 0u) {
         /* LCD transfer is programmed CPU I/O, not memory DMA. The CPU reads
          * cached framebuffer pixels and copies them into the bridge, so no
@@ -322,7 +332,9 @@ static uint32_t render_and_present(void)
             panic_code(0x50314c32u); /* P1L2 */
         }
         last_presented_damage_area = damage.area;
+        ++observed_performance.present_count;
     }
+    observed_performance.lcd_us = timer_now_us() - lcd_started;
     uint32_t elapsed = timer_now_us() - started;
     observed_performance.last_present_us = elapsed;
     if (elapsed > observed_performance.max_present_us)
@@ -752,11 +764,15 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
                 (void)render_and_present();
                 launcher_last_activity = now;
             }
+            idle_until_service();
             continue;
         }
         if (launcher_wait_release) {
             pending_wheel_delta = 0;
-            if (input->buttons != 0u || input->wheel_touched) continue;
+            if (input->buttons != 0u || input->wheel_touched) {
+                idle_until_service();
+                continue;
+            }
             launcher_wait_release = false;
             input->wheel_delta = 0;
             next_frame = now;
@@ -789,7 +805,11 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
         } else {
             exit_chord_start = 0u;
         }
-        if ((int32_t)(now - next_frame) < 0) continue;
+        if ((int32_t)(now - next_frame) < 0) {
+            idle_until_service();
+            continue;
+        }
+        next_frame = now + PJS_RENDER_GAP_US;
 
         PjsCoreInput frame_input = core_input(
             input, power, &scheduler, pending_wheel_delta, cache_enabled,
@@ -809,7 +829,6 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
             observed_performance.max_frame_us = observed_performance.last_frame_us;
         int32_t selection = qjs_runtime_launcher_selection();
         if (pjs_core_needs_render() != 0u) last_frame_us = render_and_present();
-        next_frame = timer_now_us() + 16667u;
         /* Consume the launch gesture before the next guest installs handlers. */
         if (selection < 0 || input->buttons != 0u || input->wheel_touched) continue;
 
@@ -826,6 +845,7 @@ static int32_t run_package_launcher(const PjsStorageCatalog *catalog,
 void kernel_main(void)
 {
     disable_interrupt_sources();
+    cpu_idle_init();
     /* Bootloader handoff inherits a 24 MHz source on the measured A1099.
      * Establish our CPU baseline before LCD/USB ownership. Hold inherited
      * USB engines in reset and stop DMA0 before the IRAM memory transition.
@@ -1469,7 +1489,11 @@ boot_apps:
             /* Upload/idle control traffic must not wait behind an uncached
              * 60 Hz render and telemetry pass. RUN flips runtime_active and
              * rejoins the normal guest frame loop on the next iteration. */
-            if (usb_takeover && !runtime_active) continue;
+            if (usb_takeover && !runtime_active) {
+                if (!usb_protocol.upload_active && !usb_protocol.runtime_boot_pending)
+                    idle_until_service();
+                continue;
+            }
         }
         /* This path remains hot while no frame is required. It samples input
          * continuously and preserves wheel motion until the next fixed step. */
@@ -1810,7 +1834,10 @@ boot_apps:
         /* A successful suspend puts the panel to sleep. Keep input, source,
          * and battery sampling alive, but do not step the guest or transfer a
          * dirty diagnostic frame until kernel_resume() wakes the panel. */
-        if (lifecycle.suspended != 0u) continue;
+        if (lifecycle.suspended != 0u) {
+            idle_until_service();
+            continue;
+        }
 
         /* An uncached guest can remain behind the timer indefinitely.
          * Give input and presentation a turn after each simulation step. */
@@ -1929,10 +1956,11 @@ boot_apps:
         now = timer_now_us();
         if (pjs_core_needs_render() == 0u ||
             (int32_t)(now - next_present) < 0) {
+            if (steps == 0u) idle_until_service();
             continue;
         }
 
+        next_present = now + PJS_RENDER_GAP_US;
         last_frame_us = render_and_present();
-        next_present = timer_now_us() + PJS_RENDER_GAP_US;
     }
 }

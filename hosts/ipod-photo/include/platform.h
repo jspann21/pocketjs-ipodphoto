@@ -20,7 +20,7 @@
  * semantics while presenting only when the LCD is ready and content is dirty. */
 #define PJS_PROBE_FRAME_US 33333u
 #define PJS_TIMER_IRQ_US 1000u
-#define PJS_RENDER_GAP_US 50000u
+#define PJS_RENDER_GAP_US 16667u
 #define PJS_HEAP_TOP_GUARD (64u * 1024u)
 
 /* Conservative timeouts: every hardware wait must terminate. */

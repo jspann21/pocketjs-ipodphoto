@@ -57,7 +57,7 @@ EMBEDDED_PACKAGE_O := $(BUILD)/generated/embedded_package.o
 EMBEDDED_PACKAGE_STAMP := $(BUILD)/generated/.package-ready
 EMBEDDED_PACKAGE_DEP := $(EMBEDDED_POCKET_INPUT) $(LAUNCHER_POCKET_INPUT)
 EMBEDDED_PACKAGE_ARGS := --input-package $(EMBEDDED_POCKET_INPUT) --launcher-package $(LAUNCHER_POCKET_INPUT)
-SOURCES := src/audio.c src/audio_clock.c src/audio_dma.c src/audio_pcm.c src/audio_pcm_mixer.c src/backlight.c src/cache.c src/data_fs.c src/fat32.c src/fs_store.c src/heap.c src/input.c src/irq.c src/lcd.c src/libc_shim.c src/lineage_record.c src/main.c src/mem.c src/native_loader.c src/package_store.c src/panic.c src/power.c src/qjs_runtime.c src/scheduler.c src/state_record.c src/storage.c src/timer.c src/timer_irq.c src/usb_device.c src/usb_protocol.c
+SOURCES := src/audio.c src/audio_clock.c src/audio_dma.c src/audio_pcm.c src/audio_pcm_mixer.c src/backlight.c src/cache.c src/cpu_idle.c src/data_fs.c src/fat32.c src/fs_store.c src/heap.c src/input.c src/irq.c src/lcd.c src/libc_shim.c src/lineage_record.c src/main.c src/mem.c src/native_loader.c src/package_store.c src/panic.c src/power.c src/qjs_runtime.c src/scheduler.c src/state_record.c src/storage.c src/timer.c src/timer_irq.c src/usb_device.c src/usb_protocol.c
 OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(SOURCES)) $(EMBEDDED_PACKAGE_O) \
            $(BUILD)/boot/crt0.o $(BUILD)/boot/audio-clock.o $(BUILD)/boot/usb-chainload.o
 DEPFILES := $(OBJECTS:.o=.d)
@@ -75,14 +75,14 @@ SHA256SUMS := $(BUILD)/SHA256SUMS.txt
 all: $(IPOD) $(DIS) inspect manifest
 
 # The main-thread PCM producer must meet a 1024-frame/23.22 ms deadline.
-# Optimize these two bounded hot paths for throughput, not minimum code size.
-$(BUILD)/src/audio_pcm_mixer.o $(BUILD)/src/audio_pcm.o: CFLAGS += -O2
+# Optimize PCM, guest dispatch, and LCD hot paths for throughput.
+$(BUILD)/src/audio_pcm_mixer.o $(BUILD)/src/audio_pcm.o $(BUILD)/src/qjs_runtime.o $(BUILD)/src/lcd.o: CFLAGS += -O2
 
-$(BUILD)/%.o: %.c
+$(BUILD)/%.o: %.c Makefile
 	@mkdir -p $(dir $@)
 	$(CLANG) $(CFLAGS) $(RUNTIME_INCLUDES) $(RUNTIME_DEFINES) -c $< -o $@
 
-$(BUILD)/src/qjs_runtime.o: src/qjs_runtime.c $(QUICKJS_STAMP)
+$(BUILD)/src/qjs_runtime.o: src/qjs_runtime.c $(QUICKJS_STAMP) Makefile
 	@mkdir -p $(dir $@)
 	$(CLANG) $(CFLAGS) $(RUNTIME_INCLUDES) $(RUNTIME_DEFINES) -c $< -o $@
 
@@ -131,11 +131,11 @@ $(QUICKJS_STAMP): third_party/quickjs.lock third_party/quickjs-baremetal.patch
 
 quickjs-source: $(QUICKJS_STAMP)
 
-$(BUILD)/quickjs-obj/%.o: $(QUICKJS_STAMP)
+$(BUILD)/quickjs-obj/%.o: $(QUICKJS_STAMP) Makefile
 	@mkdir -p $(dir $@)
 	$(CLANG) $(CPUFLAGS) -ffreestanding -fno-builtin -fno-stack-protector \
 	  -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections \
-	  -ffunction-sections -fno-strict-aliasing -fwrapv -Os -std=gnu11 -w \
+	  -ffunction-sections -fno-strict-aliasing -fwrapv -O2 -std=gnu11 -w \
 	  -isystem $(NEWLIB_INCLUDE) -I$(QUICKJS_PREPARED) \
 	  -D_GNU_SOURCE -DPJS_QUICKJS_BAREMETAL \
 	  -DCONFIG_VERSION=\"$(QUICKJS_VERSION)\" \

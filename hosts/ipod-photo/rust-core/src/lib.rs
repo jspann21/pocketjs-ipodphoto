@@ -977,6 +977,7 @@ pub extern "C" fn pjs_core_render_damage(
         use pocketjs_core::damage::DamageTarget;
         extern "C" {
             fn pjs_audio_stream_gate_refill();
+            fn pjs_audio_stream_gate_active() -> bool;
         }
         // Same retained damage plan and painter order, rendered in bounded
         // horizontal strips. Only native PCM code runs at these yield points:
@@ -990,10 +991,14 @@ pub extern "C" fn pjs_core_render_damage(
             Ok(plan) => plan,
             Err(_) => return -3,
         };
+        // Without a PCM producer there is nothing to service between strips.
+        // Render each damage region once instead of replaying the draw list
+        // up to 22 times for a full-height frame.
+        let strip_height = if unsafe { pjs_audio_stream_gate_active() } { 8 } else { HEIGHT as i32 };
         for &region in plan.regions() {
             let mut y = region.y0;
             while y < region.y1 {
-                let end = (y + 8).min(region.y1);
+                let end = (y + strip_height).min(region.y1);
                 let strip = DamageRect::new(region.x0, y, region.x1, end);
                 unsafe {
                     pjs_audio_stream_gate_refill();

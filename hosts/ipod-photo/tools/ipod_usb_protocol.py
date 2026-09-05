@@ -23,6 +23,7 @@ BOOT_PROFILE_TRAILER_MARKER = 0x31504251  # QBP1
 POWER_TRAILER_MARKER = 0x31525750  # PWR1
 PACKAGE_STATUS_TRAILER_MARKER = 0x31545350  # PST1
 DIAGNOSTICS_TRAILER_MARKER = 0x314e4744  # DGN1
+CPU_TRAILER_MARKER = 0x31555043  # CPU1
 DEFAULT_MAX_PAYLOAD = 1024
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT = 1.0
@@ -461,6 +462,15 @@ class SerialTransport:
                     for index, name in enumerate(names):
                         info[name] = u32(extra, text_end + 4 + index * 4)
                     text_end += 72
+                    continue
+                if marker == CPU_TRAILER_MARKER:
+                    if available < 28:
+                        raise ProtocolError("INFO reply has an invalid CPU trailer")
+                    names = ("cpu_window_us", "cpu_idle_us", "cpu_idle_waits",
+                             "render_us", "lcd_us", "present_count")
+                    for index, name in enumerate(names):
+                        info[name] = u32(extra, text_end + 4 + index * 4)
+                    text_end += 28
                     continue
                 if marker == PACKAGE_STATUS_TRAILER_MARKER:
                     if available < 20:

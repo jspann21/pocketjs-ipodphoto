@@ -1,6 +1,7 @@
 #include "usb_protocol.h"
 
 #include "panic.h"
+#include "cpu_idle.h"
 
 #include <stddef.h>
 
@@ -403,7 +404,7 @@ static bool handle_frame(PjsUsbProtocol *p, const uint8_t *frame,
                                 0, 0u);
         }
         /* Base + maximum error text + all optional diagnostic trailers. */
-        uint8_t extra[480];
+        uint8_t extra[512];
         put_u32(extra, PJS_USB_PROTOCOL_VERSION);
         put_u32(extra + 4u, (uint32_t)p->state);
         put_u32(extra + 8u, p->package_valid ? p->uploaded_package_length : 0u);
@@ -510,6 +511,17 @@ static bool handle_frame(PjsUsbProtocol *p, const uint8_t *frame,
             for (uint32_t index = 0u; index < 17u; ++index)
                 put_u32(extra + extra_length + 4u + index * 4u, values[index]);
             extra_length += 72u;
+        }
+        if (p->config.observe_only || p->maintenance_active) {
+            uint32_t window, idle, waits;
+            cpu_idle_snapshot(&window, &idle, &waits);
+            const uint32_t values[6] = {window, idle, waits,
+                p->performance.render_us, p->performance.lcd_us,
+                p->performance.present_count};
+            put_u32(extra + extra_length, PJS_USB_CPU_TRAILER_MARKER);
+            for (uint32_t index = 0u; index < 6u; ++index)
+                put_u32(extra + extra_length + 4u + index * 4u, values[index]);
+            extra_length += 28u;
         }
         return queue_status(p, type, sequence, PJS_USB_STATUS_OK,
                             extra, extra_length);

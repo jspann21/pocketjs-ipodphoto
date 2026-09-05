@@ -35,6 +35,7 @@
 #define PJS_USB_PACKAGE_STATUS_TRAILER_MARKER 0x31545350u /* PST1 */
 #define PJS_USB_COMMIT_STATUS_UNAVAILABLE INT32_MIN
 #define PJS_USB_DIAGNOSTICS_TRAILER_MARKER 0x314e4744u /* DGN1 */
+#define PJS_USB_CPU_TRAILER_MARKER 0x31555043u /* CPU1 */
 
 typedef struct {
     uint32_t heap_free, heap_largest_free, heap_allocated;
@@ -55,6 +56,7 @@ typedef struct {
     uint32_t last_present_us;
     uint32_t max_present_us;
     uint32_t lineage_commit_us;
+    uint32_t render_us, lcd_us, present_count;
 } PjsUsbPerformance;
 
 typedef struct {
