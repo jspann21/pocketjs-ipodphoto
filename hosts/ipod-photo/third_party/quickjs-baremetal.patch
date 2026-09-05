@@ -1,0 +1,29 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -50,7 +50,7 @@
+ #endif
+ #if defined(__APPLE__)
+ #include <malloc/malloc.h>
+-#elif defined(__PSP__) || defined(__vita__)
++#elif defined(__PSP__) || defined(__vita__) || defined(PJS_QUICKJS_BAREMETAL)
+ #include <malloc.h>
+ #ifdef __PSP__
+ #include "patch.h"
+@@ -97,7 +97,7 @@
+ #if !defined(__EMSCRIPTEN__)
+ #define CONFIG_ATOMICS
+ #endif
+-#if defined(__PSP__) || defined(__vita__)
++#if defined(__PSP__) || defined(__vita__) || defined(PJS_QUICKJS_BAREMETAL)
+ #undef CONFIG_ATOMICS
+ #endif
+
+@@ -47302,7 +47302,7 @@
+         res = (gm_ti - loc_ti) / 60;
+     }
+ #else
+-#if defined(__PSP__) || defined(__vita__)
++#if defined(__PSP__) || defined(__vita__) || defined(PJS_QUICKJS_BAREMETAL)
+     (void)ti;
+     res = 0;
+ #else

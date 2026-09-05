@@ -1,0 +1,29 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.pocket-stack.ipod-photo",
+  "name": "pocketjs-ipod-photo",
+  "title": "PocketJS: iPod Photo Home",
+  "version": "0.1.0",
+  "engine": {
+    "capabilities": {
+      "requires": [
+        "text.glyphs.baked",
+        "input.buttons",
+        "audio.pcm",
+        "data.fs"
+      ]
+    }
+  },
+  "app": {
+    "entry": "apps/ipod-photo/main.tsx",
+    "output": "ipod-photo-main",
+    "framework": "solid",
+    "viewport": {
+      "fixed": {
+        "logical": [220, 176],
+        "presentation": "native"
+      }
+    }
+  }
+}

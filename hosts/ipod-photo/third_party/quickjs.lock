@@ -1,0 +1,5 @@
+repository=https://github.com/pocket-stack/quickjs-rs.git
+revision=ba5bdd0dc013518768e76cd9e05cd30ed53dd35b
+upstreamVersion=2026-06-04
+sourceSubdirectory=libquickjs-sys/embed/quickjs
+portPatch=quickjs-baremetal.patch

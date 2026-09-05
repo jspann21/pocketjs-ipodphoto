@@ -1,0 +1,26 @@
+[package]
+name = "pocketjs-ipod-photo-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+production = []
+cooperative-audio = []
+portable-audio = ["cooperative-audio"]
+portable-fs = []
+
+[dependencies]
+pocketjs-core = { path = "../../../engine/core" }
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = false
+
+[workspace]

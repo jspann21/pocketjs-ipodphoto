@@ -238,6 +238,7 @@ export const POCKET_TARGETS = defineTargetRegistry<PocketCapabilityId, {
   readonly "macos-app": TargetProfile<PocketCapabilityId>;
   readonly "linux-app": TargetProfile<PocketCapabilityId>;
   readonly "web-app": TargetProfile<PocketCapabilityId>;
+  readonly "ipod-photo": TargetProfile<PocketCapabilityId>;
 }>({
   psp: {
     hostAbi: 1,
@@ -410,6 +411,25 @@ export const POCKET_TARGETS = defineTargetRegistry<PocketCapabilityId, {
     roleCapabilities: {
       systemUI: ["ui.compositor-surfaces"],
     },
+  },
+  // Apple iPod photo (A1099) takeover host. The stock device surface is a
+  // native 220x176 panel: unlike PSP/Vita it has no analog, pointer, touch,
+  // or live-viewport contract. Apps use the shared buttons, baked-glyph,
+  // PCM audio and filesystem surfaces. ABI values are scoped to
+  // a target; version 1 preserves the already-qualified package and native
+  // host contract for `ipod-photo`.
+  "ipod-photo": {
+    hostAbi: 1,
+    platform: "ipod-photo",
+    form: "takeover",
+    display: {
+      physicalViewport: [220, 176],
+      logicalViewports: [[220, 176]],
+      presentations: ["native"],
+      rasterDensity: 1,
+    },
+    // The production host mounts PCM and the per-app filesystem.
+    capabilities: ["input.buttons", "audio.pcm", "data.fs", "text.glyphs.baked"],
   },
 });
 

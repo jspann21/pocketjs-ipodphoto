@@ -1,0 +1,12 @@
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[build]
+target = "armv4t-none-eabi"
+
+[target.armv4t-none-eabi]
+rustflags = [
+  "-C", "panic=abort",
+  "-C", "relocation-model=static",
+]

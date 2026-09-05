@@ -251,6 +251,10 @@ See also: [Architecture](https://pocketjs.dev/docs/architecture/) ·
 
 ## Hardware support
 
+The [iPod Photo A1099 port](./hosts/ipod-photo/README.md) adds a
+standalone PP5020 host with a 220 × 176 display, buttons, PCM audio, and app
+storage. Its build instructions and validation limits are documented with the host.
+
 PocketJS has booted on every operating system below, on the real machine. What
 changes between them is one native submission layer, never the application, and
 each row links to the post or pull request that brought it up. Keeping the

@@ -1,0 +1,4 @@
+/build*/
+/third_party/quickjs/
+__pycache__/
+*.pyc

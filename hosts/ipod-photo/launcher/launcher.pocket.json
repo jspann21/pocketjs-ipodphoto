@@ -1,0 +1,21 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.pocket-stack.ipod-photo-launcher",
+  "name": "pocketjs-ipod-photo-launcher",
+  "title": "PocketJS: iPod Photo Apps",
+  "version": "0.1.1",
+  "engine": {
+    "capabilities": {
+      "requires": ["text.glyphs.baked", "input.buttons"]
+    }
+  },
+  "app": {
+    "entry": "hosts/ipod-photo/launcher/launcher-main.tsx",
+    "output": "ipod-photo-launcher-main",
+    "framework": "solid",
+    "viewport": {
+      "fixed": { "logical": [220, 176], "presentation": "native" }
+    }
+  }
+}

@@ -18,7 +18,7 @@ import {
   validatePocketIdfHostProfile,
 } from "../framework/src/manifest/idf-host.ts";
 import { encodePocketPackage } from "../contracts/spec/pocket-package.ts";
-import { makeVariant } from "./pocket-pack.ts";
+import { makeVariant, encodeTargetPackage } from "./pocket-pack.ts";
 
 import { fileURLToPath } from "node:url";
 
@@ -202,6 +202,7 @@ if (hostProfileOption) {
 interface TargetBackendContext {
   readonly plan: ResolvedBuildPlan;
   readonly planPath: string;
+  readonly manifestPath: string;
   readonly projectRoot: string;
   readonly outdir: string;
   readonly args: readonly string[];
@@ -249,11 +250,31 @@ const targetBackends = {
         `(hosts/pocketbook, cargo zigbuild) and copy both to the device.`,
     );
   },
+  "ipod-photo": async ({ plan, manifestPath, outdir }) => {
+    // iPod photo uses the ordinary compiler output directly. Package the
+    // single admitted target variant here so `pocket build` is the same
+    // compiler/packer path as `pocket-pack build`, without pretending this
+    // target has a native firmware linker in the framework toolchain.
+    const jsPath = resolve(outdir, `${plan.app.output}.js`);
+    const pakPath = resolve(outdir, `${plan.app.output}.pak`);
+    const manifest = new Uint8Array(await Bun.file(manifestPath).arrayBuffer());
+    const js = new Uint8Array(await Bun.file(jsPath).arrayBuffer());
+    const pak = existsSync(pakPath)
+      ? new Uint8Array(await Bun.file(pakPath).arrayBuffer())
+      : new Uint8Array(0);
+    const packageName = (manifestInput as { name?: string }).name ?? plan.app.output;
+    const packagePath = resolve(outdir, "packages", `${packageName}.pocket`);
+    mkdirSync(dirname(packagePath), { recursive: true });
+    const bytes = encodeTargetPackage({ manifest, plan, js, pak });
+    await Bun.write(packagePath, bytes);
+    console.log(`✓ iPod Photo package ready in ${packagePath} (${bytes.length}B)`);
+  },
 } satisfies Record<PocketTargetId, TargetBackend>;
 
 await targetBackends[target as PocketTargetId]({
   plan,
   planPath,
+  manifestPath,
   projectRoot,
   outdir,
   args: backendArgs,

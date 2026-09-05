@@ -1243,6 +1243,18 @@ impl Ui {
 
     // ---- frame -------------------------------------------------------------
 
+    /// Whether a tick may change visible output without another host mutation.
+    /// Query before ticking so an animation's final frame is also presented.
+    /// Timelines are conservative: a retained fill may still return true.
+    pub fn has_time_driven_output(&self) -> bool {
+        if self.paused && !self.step_pending {
+            return false;
+        }
+        self.anims.tracks.iter().any(|track| track.alive)
+            || self.timelines.iter().any(|timeline| timeline.alive)
+            || self.tree.slots.iter().any(|node| node.alive && node.sprite_frames > 1)
+    }
+
     /// Advance one frame: tick animations by exactly one `set_tick_rate`
     /// step, then re-run layout if dirty. Call once per vblank, BEFORE
     /// `draw()`.

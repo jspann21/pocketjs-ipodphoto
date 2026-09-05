@@ -530,7 +530,7 @@ const result = await Bun.build({
       ? { document: "globalThis.__pocketDocument" }
       : {}),
   },
-  minify: false,
+  minify: buildPlan?.target.id === "ipod-photo",
   metafile: true,
   sourcemap: "none",
   plugins: [jsxPlugin(framework, {

@@ -86,6 +86,7 @@ pub struct Guest<'a> {
     pub plan: &'a [u8],
     pub package_hash: u64,
     pub variant_hash: u64,
+    pub app_id: &'a str,
 }
 
 fn u32_at(bytes: &[u8], off: usize) -> Result<u32, PackageError> {
@@ -245,9 +246,7 @@ pub fn select_guest<'a>(
     if variant.host_abi != host_abi {
         return Err(GuestError::HostAbiMismatch);
     }
-    if variant.identity()?.is_none() {
-        return Err(GuestError::MissingIdentity);
-    }
+    let identity = variant.identity()?.ok_or(GuestError::MissingIdentity)?;
     let plan = variant
         .section(section::PLAN)?
         .filter(|value| !value.is_empty())
@@ -266,6 +265,7 @@ pub fn select_guest<'a>(
         plan,
         package_hash: package.package_hash()?,
         variant_hash: variant.variant_hash,
+        app_id: identity.id,
     })
 }
 

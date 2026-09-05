@@ -19,6 +19,7 @@ import { readIdfHostExtension } from "../framework/src/manifest/idf-host.ts";
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { POCKET_TARGETS } from "../contracts/spec/platforms.ts";
 import { validateAndResolveBuildPlan } from "../framework/src/manifest/resolve.ts";
 import {
@@ -44,7 +45,7 @@ import {
   type PocketPackageVariant,
 } from "../contracts/spec/pocket-package.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 function usage(message?: string): never {
   if (message) console.error(`pocket-pack: ${message}`);
@@ -104,6 +105,38 @@ export function makeVariant(input: {
     });
   }
   return { target: input.target, hostAbi: input.hostAbi, sections };
+}
+
+/**
+ * Encode the target-thinned package produced by the standard compiler path.
+ * Keeping this beside makeVariant means `pocket build` and `pocket-pack
+ * build` use the same container shape, plan canonicalization, and NUL rule.
+ */
+export function encodeTargetPackage(input: {
+  manifest: Uint8Array;
+  plan: ResolvedBuildPlan;
+  js: Uint8Array;
+  pak?: Uint8Array;
+  cover?: Uint8Array;
+}): Uint8Array {
+  return encodePocketPackage({
+    manifest: input.manifest,
+    variants: [
+      makeVariant({
+        target: input.plan.target.id,
+        hostAbi: input.plan.target.hostAbi,
+        planJson: canonicalJson(input.plan),
+        identity: {
+          output: input.plan.app.output,
+          id: input.plan.app.id,
+          title: input.plan.app.title,
+        },
+        js: input.js,
+        pak: input.pak ?? new Uint8Array(0),
+        cover: input.cover,
+      }),
+    ],
+  });
 }
 
 function resolveTarget(manifest: unknown, target: string) {

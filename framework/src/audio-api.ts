@@ -47,6 +47,71 @@ export function audioHost(): AudioOps | null {
   return typeof (ns as AudioOps).createStream === "function" ? (ns as AudioOps) : null;
 }
 
+// poll() is a namespace-wide queue, while createWavPlayer() is per stream.
+// Route each host event exactly once so one player's pump can never consume a
+// sibling player's credit/ended/underrun event. A host identity change is the
+// app-load boundary: old handle mailboxes cannot leak into a replacement host.
+type RoutedAudioEvent = { t?: string; h?: number; free?: number };
+const ROUTED_EVENT_LIMIT = 32;
+let routedHost: AudioOps | null = null;
+const routedEvents = new Map<number, RoutedAudioEvent[]>();
+
+function ensureRoutedHost(ns: AudioOps): void {
+  if (routedHost === ns) return;
+  routedHost = ns;
+  routedEvents.clear();
+}
+
+function enqueueRoutedEvent(event: RoutedAudioEvent): void {
+  if (typeof event.h !== "number" || !Number.isInteger(event.h)) return;
+  let queue = routedEvents.get(event.h);
+  if (!queue) {
+    queue = [];
+    routedEvents.set(event.h, queue);
+  }
+  // Credit is level state, not an edge: only its newest value matters. This
+  // bounds a player that intentionally pumps less often than the host clock.
+  if (event.t === "credit") {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      if (queue[i].t === "credit") {
+        queue[i] = event;
+        return;
+      }
+    }
+  }
+  if (queue.length >= ROUTED_EVENT_LIMIT) {
+    const credit = queue.findIndex((candidate) => candidate.t === "credit");
+    if (credit >= 0) queue.splice(credit, 1);
+    else queue.shift();
+  }
+  queue.push(event);
+}
+
+function routeAudioEvents(ns: AudioOps): void {
+  ensureRoutedHost(ns);
+  for (let line = ns.poll(); line !== undefined; line = ns.poll()) {
+    let event: RoutedAudioEvent;
+    try {
+      event = JSON.parse(line) as RoutedAudioEvent;
+    } catch {
+      continue; // malformed host events are ignored without wedging siblings
+    }
+    enqueueRoutedEvent(event);
+  }
+}
+
+function takeRoutedAudioEvents(ns: AudioOps, handle: number): RoutedAudioEvent[] {
+  routeAudioEvents(ns);
+  const queue = routedEvents.get(handle);
+  if (!queue) return [];
+  routedEvents.delete(handle);
+  return queue;
+}
+
+function purgeRoutedAudioHandle(ns: AudioOps, handle: number): void {
+  if (routedHost === ns) routedEvents.delete(handle);
+}
+
 // ---------------------------------------------------------------------------
 // WAV decode (the reference decoder for the audio:wav.* data contract)
 // ---------------------------------------------------------------------------
@@ -178,7 +243,10 @@ export function createWavPlayer(): WavPlayer {
 
   function dropStream(): void {
     const ns = audioHost();
-    if (ns && handle >= 0) ns.destroyStream(handle);
+    if (ns && handle >= 0) {
+      purgeRoutedAudioHandle(ns, handle);
+      ns.destroyStream(handle);
+    }
     handle = -1;
   }
 
@@ -198,17 +266,13 @@ export function createWavPlayer(): WavPlayer {
   }
 
   function drainEvents(ns: AudioOps): void {
-    for (let line = ns.poll(); line !== undefined; line = ns.poll()) {
-      let ev: { t?: string; h?: number; free?: number };
-      try {
-        ev = JSON.parse(line) as typeof ev;
-      } catch {
-        continue; // a malformed event is a host bug; skip, don't wedge the pump
-      }
-      if (ev.h !== handle) continue; // another player's stream
+    for (const ev of takeRoutedAudioEvents(ns, handle)) {
       if (ev.t === "credit" && typeof ev.free === "number") free = ev.free;
       else if (ev.t === "underrun") underruns++;
-      else if (ev.t === "ended") isPlaying = false;
+      else if (ev.t === "ended") {
+        isPlaying = false;
+        pendingPlay = false;
+      }
     }
   }
 
@@ -252,7 +316,11 @@ export function createWavPlayer(): WavPlayer {
       free = AUDIO_RING_FRAMES; // stop flushes the ring; credit will confirm
       ended = false;
       const ns = audioHost();
-      if (ns && handle >= 0) ns.stop(handle);
+      if (ns && handle >= 0) {
+        // A pre-stop credit is stale once the host flushes this source ring.
+        purgeRoutedAudioHandle(ns, handle);
+        ns.stop(handle);
+      }
     },
     setVolume(v: number): void {
       volume = v < 0 ? 0 : v > 1 ? 1 : v;
