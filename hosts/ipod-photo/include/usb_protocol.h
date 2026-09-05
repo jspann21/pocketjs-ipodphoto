@@ -225,6 +225,7 @@ typedef struct {
     bool maintenance_ack_written;
     bool maintenance_active;
     bool reboot_request;
+    bool reboot_disk_mode;
     bool reboot_ack_pending;
     bool reboot_ack_written;
     int32_t commit_status;

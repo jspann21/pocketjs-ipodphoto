@@ -504,9 +504,9 @@ class SerialTransport:
             raise ProtocolError("COMMIT_PACKAGE reply is missing generation")
         return {"generation": u32(extra)}
 
-    def reboot(self, timeout: float = 3.0) -> None:
+    def reboot(self, timeout: float = 3.0, *, disk_mode: bool = False) -> None:
         """Request maintenance reboot; never retries this mutation."""
-        self.request(REBOOT, timeout=timeout)
+        self.request(REBOOT, b"\x01" if disk_mode else b"", timeout=timeout)
 
     def enter_maintenance(self, timeout: float = 30.0,
                           poll_interval: float = 0.2) -> Dict[str, int]:

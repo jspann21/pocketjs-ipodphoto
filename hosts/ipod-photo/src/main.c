@@ -1543,12 +1543,21 @@ boot_apps:
 
             if (usb_takeover && !runtime_active && pjs_usb_cdc_tx_idle() &&
                 pjs_usb_protocol_take_reboot_request(&usb_protocol)) {
-                if (!kernel_shutdown_storage(&lineage, &disk_power, &audio)) {
+                bool disk_mode = usb_protocol.reboot_disk_mode;
+                PjsStorageDiskHandoff handoff = {0};
+                bool prepared = !disk_mode ||
+                    (pjs_storage_prepare_disk_handoff(&handoff) == PJS_STORAGE_OK &&
+                     pjs_storage_disk_handoff_armed());
+                if (!prepared || !kernel_shutdown_storage(&lineage, &disk_power, &audio)) {
+                    if (disk_mode) pjs_storage_disk_handoff_clear();
                     (void)pjs_usb_protocol_result(&usb_protocol, 8u, -1);
                 } else {
                     timer_irq_stop();
                     irq_disable_global();
                     pjs_usb_device_shutdown();
+                    backlight_suspend();
+                    (void)lcd_sleep();
+                    if (disk_mode) pp_reboot_disk_mode();
                     pp_reboot();
                 }
             }

@@ -682,7 +682,11 @@ static bool handle_frame(PjsUsbProtocol *p, const uint8_t *frame,
                             PJS_USB_STATUS_INTERNAL, result, 4u);
     }
     case PJS_USB_MSG_REBOOT: {
-        if (payload_length != 0u || !p->maintenance_active ||
+        /* Empty retains normal reboot; target 1 requests Apple Disk Mode.
+         * Older firmware rejects this payload rather than rebooting normally. */
+        if (payload_length > 1u || (payload_length == 1u && payload[0] != 1u))
+            return queue_status(p, type, sequence, PJS_USB_STATUS_BAD_REQUEST, 0, 0u);
+        if (!p->maintenance_active ||
             p->runtime_active || p->runtime_boot_pending || p->upload_active ||
             p->image_upload_active || p->reboot_request ||
             p->reboot_ack_pending || p->reboot_ack_written) {
@@ -691,6 +695,7 @@ static bool handle_frame(PjsUsbProtocol *p, const uint8_t *frame,
         if (!queue_status(p, type, sequence, PJS_USB_STATUS_OK, 0, 0u)) {
             return false;
         }
+        p->reboot_disk_mode = payload_length == 1u;
         p->reboot_request = true;
         p->reboot_ack_pending = true;
         return true;
@@ -1114,6 +1119,7 @@ void pjs_usb_protocol_reset_observer_transport(PjsUsbProtocol *p)
     p->reboot_request = false;
     p->reboot_ack_pending = false;
     p->reboot_ack_written = false;
+    p->reboot_disk_mode = false;
     /* A lost RUN acknowledgement must not cause a later epoch to boot a
      * request that the host never observed.  Keep an already-running guest,
      * package/image validity, and their staging identity unchanged. */

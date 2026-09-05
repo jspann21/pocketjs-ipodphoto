@@ -668,6 +668,14 @@ class IpodRunner:
             self.enter_maintenance()
         elif command == "commit":
             self.commit_package()
+        elif command == "disk-mode":
+            assert self.transport is not None
+            if self.transport.package_capacity < 4 * 1024 * 1024:
+                self.enter_maintenance()
+            self.request(STOP, timeout=10.0)
+            self.transport.reboot(self.args.handshake_timeout, disk_mode=True)
+            self.emit({"type": "reboot", "target": "disk-mode", "status": "acknowledged",
+                       "port": self.transport.port})
         elif command == "reboot":
             self.reboot()
         return 0
@@ -708,7 +716,7 @@ def resolve_port(explicit: Optional[str], baud: int, timeout: float) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="PocketJS iPod Photo binary PJSU USB runner")
-    p.add_argument("command", choices=("discover", "info", "status", "upload", "run", "stop", "watch", "maintenance", "commit", "reboot", "chainload", "flash", "cycle", "batch", "apps", "install", "remove", "launch"))
+    p.add_argument("command", choices=("discover", "info", "status", "upload", "run", "stop", "watch", "maintenance", "commit", "reboot", "disk-mode", "chainload", "flash", "cycle", "batch", "apps", "install", "remove", "launch"))
     p.add_argument("--port", help="serial port (Windows COM7, macOS /dev/cu.*, Linux /dev/ttyACM0)")
     p.add_argument("--baud", type=int, default=DEFAULT_BAUD)
     p.add_argument("--timeout", type=float, default=1.0)

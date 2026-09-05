@@ -456,10 +456,11 @@ function appsCommand(args) {
   } else {
     let command;
     if (action === "list") command = ["apps", ...args.slice(1)];
+    else if (action === "disk-mode") command = ["disk-mode", ...args.slice(1)];
     else if (action === "install" && value) command = ["install", "--package", value, ...remaining];
     else if (["remove", "launch"].includes(action) && value) command = [action, "--name", value, ...remaining];
     else {
-      console.error(C.bad("usage: pocket apps list | install <package> --name NAME | remove NAME | launch NAME | setup --volume PATH"));
+      console.error(C.bad("usage: pocket apps list | install <package> --name NAME | remove NAME | launch NAME | disk-mode | setup --volume PATH"));
       process.exit(1);
     }
     forwarded = [join(root, "hosts/ipod-photo/tools/ipod_usb_runner.py"), ...command, "--noninteractive"];
@@ -497,7 +498,7 @@ const HELP = `${C.bold("pocket")} — the PocketJS toolchain CLI
   pocket setup [--yes]     install what doctor found missing
   pocket create <name> [--target ipod-photo]
                            scaffold a pocket.json v2 app under apps/<name>
-  pocket apps <command>     list, install, remove, or launch iPod Photo apps
+  pocket apps <command>     manage iPod Photo apps or reboot to disk-mode
   pocket check --target T  validate pocket.json, target APIs and app types
   pocket check --host-profile FILE
                            validate against an ESP-IDF product host
