@@ -194,7 +194,7 @@ class SerialTransport:
             raise TransportError("pyserial is required; install it with `python -m pip install pyserial`") from exc
         try:
             self._serial = serial.Serial(
-                self.port, self.baud, timeout=self.timeout,
+                self.port, self.baud, timeout=0,
                 write_timeout=max(1.0, self.timeout), dsrdtr=False, rtscts=False,
             )
             self._serial.dtr = False
@@ -260,14 +260,11 @@ class SerialTransport:
         self.open()
         deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
         out = bytearray()
-        original_timeout = self._serial.timeout
         try:
             while len(out) < length and time.monotonic() < deadline:
-                remaining_time = max(0.001, deadline - time.monotonic())
-                if original_timeout is None:
-                    self._serial.timeout = remaining_time
-                else:
-                    self._serial.timeout = min(original_timeout, remaining_time)
+                # Keep the port nonblocking and enforce the deadline here.
+                # Changing pyserial.timeout calls SetCommState on Windows,
+                # reconfiguring CDC in the middle of a request/response.
                 remaining = min(length - len(out), max(1, getattr(self._serial, "in_waiting", 0)))
                 part = self._serial.read(remaining)
                 if part:
@@ -277,9 +274,6 @@ class SerialTransport:
         except Exception as exc:
             self.close()
             raise TransportError(f"serial read failed on {self.port}: {exc}") from exc
-        finally:
-            if self._serial is not None:
-                self._serial.timeout = original_timeout
         if len(out) != length:
             raise TimeoutError(f"timed out after {timeout or self.timeout:.1f}s waiting for PJSU frame")
         return bytes(out)
