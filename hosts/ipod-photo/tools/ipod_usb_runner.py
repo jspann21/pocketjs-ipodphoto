@@ -8,7 +8,9 @@ JSON is presentation-only. The serial wire is the 20-byte binary frame from
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
+import math
 import os
 import re
 import struct
@@ -180,6 +182,8 @@ class IpodRunner:
                 offset = 0
                 next_progress = 5.0
                 chunk_limit = max(1, self.transport.max_payload - 4)
+                if self.args.chunk_size:
+                    chunk_limit = min(chunk_limit, self.args.chunk_size)
                 if attempt:
                     chunk_limit = min(chunk_limit, 1024)
                 while offset < len(payload):
@@ -371,8 +375,6 @@ class IpodRunner:
         before = self.wait_for_runtime(boot_timeout)
         self.finish_info()
         settle = max(0.05, self.args.settle)
-        if getattr(self.args, "batch_mode", False):
-            settle = min(settle, 5.0)
         time.sleep(settle)
         after = read_info()
         self.finish_info()
@@ -508,13 +510,20 @@ class IpodRunner:
                    "port": self.transport.port})
 
     def batch(self) -> int:
-        """Run HOME/TIMER/HOME with host-handle boundaries and no device reset."""
+        """Run an ordered package sequence with host-handle boundaries."""
         self.args.batch_mode = True
         if self.batch_log is None:
             self.batch_log = open(self.args.batch_log, "w", encoding="utf-8")
-        cases = (("HOME", Path(self.args.home_package)),
-                 ("TIMER", Path(self.args.timer_package)),
-                 ("HOME_REOPEN", Path(self.args.home_package)))
+        if self.args.batch_package:
+            cases = [(f"{index + 1}:{Path(path).stem}", Path(path))
+                     for index, path in enumerate(self.args.batch_package)]
+        else:
+            cases = [("HOME", Path(self.args.home_package)),
+                     ("TIMER", Path(self.args.timer_package)),
+                     ("HOME_REOPEN", Path(self.args.home_package))]
+        if self.args.repeat > 1:
+            cases = [(f"{iteration + 1}/{name}", package)
+                     for iteration in range(self.args.repeat) for name, package in cases]
         self.emit({"type": "batch", "status": "started", "cases": [name for name, _ in cases],
                    "maintenance": bool(self.args.maintenance_once), "port": self.args.port})
         if self.args.maintenance_once:
@@ -552,7 +561,12 @@ class IpodRunner:
             self.emit({"type": "ports", "ports": discover_ports()})
             return 0
         if command == "batch":
+            if self.args.batch_log is None:
+                log_dir = Path(__file__).resolve().parents[1] / "build" / "usb"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                self.args.batch_log = str(log_dir / f"batch-{datetime.now():%Y%m%d-%H%M%S-%f}.jsonl")
             self.batch_log = open(self.args.batch_log, "w", encoding="utf-8")
+            self.emit({"type": "batch_log", "path": str(Path(self.args.batch_log).resolve())})
         self.connect()
         if command == "discover":
             return 0
@@ -645,6 +659,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--noninteractive", action="store_true", help="fail on an unanswered prompt")
     p.add_argument("--answer", action="append", metavar="TOKEN=VALUE")
     p.add_argument("--package", help=".pocket/APP.PKT payload for upload or run")
+    p.add_argument("--chunk-size", type=int, default=0,
+                   help="maximum DATA bytes per request; 0 uses the negotiated limit")
     p.add_argument("--image", help="native .ipod image for chainload/flash")
     p.add_argument("--no-watch", action="store_true")
     p.add_argument("--watch-timeout", type=float, default=None)
@@ -656,8 +672,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="seconds between cycle frame-count checks")
     p.add_argument("--home-package", help="HOME .pocket/APP.PKT package for batch")
     p.add_argument("--timer-package", help="TIMER .pocket/APP.PKT package for batch")
-    p.add_argument("--batch-log", default="ipod-batch.jsonl",
-                   help="JSONL path for batch records (default: ipod-batch.jsonl)")
+    p.add_argument("--batch-package", action="append", metavar="PATH",
+                   help="package to cycle in order; repeat this option for each batch step")
+    p.add_argument("--repeat", type=int, default=1,
+                   help="number of times to run the entire batch sequence")
+    p.add_argument("--batch-log",
+                   help="JSONL path for batch records (default: timestamped file under hosts/ipod-photo/build/usb)")
     p.add_argument("--maintenance-once", "--maintenance", dest="maintenance_once",
                    action="store_true", help="enter RAM maintenance once before the batch")
     return p
@@ -669,17 +689,24 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         build_parser().error(f"{args.command} requires --package PATH")
     if args.command in ("chainload", "flash") and args.image is None:
         build_parser().error(f"{args.command} requires --image PATH")
-    if args.command == "batch" and (args.home_package is None or args.timer_package is None):
-        build_parser().error("batch requires --home-package PATH and --timer-package PATH")
+    if args.command == "batch":
+        if args.batch_package and (args.home_package or args.timer_package):
+            build_parser().error("use --batch-package or --home-package/--timer-package, not both")
+        if not args.batch_package and (args.home_package is None or args.timer_package is None):
+            build_parser().error("batch requires --batch-package PATH or --home-package PATH and --timer-package PATH")
+    if args.repeat < 1:
+        build_parser().error("--repeat must be positive")
+    if args.chunk_size < 0:
+        build_parser().error("--chunk-size must not be negative")
     if args.package and not Path(args.package).is_file():
         build_parser().error(f"package does not exist: {args.package}")
     if args.image and not Path(args.image).is_file():
         build_parser().error(f"image does not exist: {args.image}")
     if args.commit_timeout <= 0.0:
         build_parser().error("--commit-timeout must be positive")
-    if args.command == "batch" and args.settle < 0.0:
-        build_parser().error("--settle must not be negative")
-    for path_arg in (args.home_package, args.timer_package):
+    if not math.isfinite(args.settle) or args.settle < 0.0:
+        build_parser().error("--settle must be finite and not negative")
+    for path_arg in (args.home_package, args.timer_package, *(args.batch_package or [])):
         if path_arg and not Path(path_arg).is_file():
             build_parser().error(f"package does not exist: {path_arg}")
     runner = IpodRunner(args)

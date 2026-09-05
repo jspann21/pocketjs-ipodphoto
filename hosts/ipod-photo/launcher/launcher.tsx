@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
 import { BTN } from "@pocketjs/framework/input";
 import { onButtonPress } from "@pocketjs/framework/lifecycle";
@@ -17,6 +17,10 @@ export default function IpodPhotoLauncher() {
   const apps = host?.__ipodApps ?? [];
   const bridge = host?.__ipodLauncher;
   const [selected, setSelected] = createSignal(0);
+  // Five 18px rows fit between the title and footer on the native display.
+  const pageSize = 5;
+  const pageStart = createMemo(() => Math.floor(selected() / pageSize) * pageSize);
+  const visibleApps = createMemo(() => apps.slice(pageStart(), pageStart() + pageSize));
 
   onButtonPress(BTN.LEFT | BTN.RIGHT, (pressed) => {
     if (apps.length === 0) return;
@@ -38,23 +42,28 @@ export default function IpodPhotoLauncher() {
         <Text class="h-[22] px-[9] pt-[5] text-xs text-[#555555]">Apps</Text>
         <View class="flex-1 flex-col px-[5]">
           <Show when={apps.length > 0} fallback={<Text class="h-[20] px-[8] pt-[2] text-sm text-[#555555]">No apps installed</Text>}>
-            <For each={apps}>
-          {(name, index) => (
+            <For each={visibleApps()}>
+              {(name, index) => (
                 <View
-                  class={index() === selected()
+                  class={pageStart() + index() === selected()
                     ? "h-[18] flex-row items-center justify-between px-[8] bg-gradient-to-b from-[#6db3e8] to-[#1b73ba]"
                     : "h-[18] flex-row items-center justify-between px-[8] bg-[#fafafa]"}
                 >
-                  <Text class={index() === selected() ? "text-xs text-white font-bold" : "text-xs text-[#202020]"}>{name}</Text>
-                  <Text class={index() === selected() ? "text-xs text-white font-bold" : "text-xs text-[#777777]"}>{">"}</Text>
+                  <Text class={pageStart() + index() === selected() ? "text-xs text-white font-bold" : "text-xs text-[#202020]"}>{name}</Text>
+                  <Text class={pageStart() + index() === selected() ? "text-xs text-white font-bold" : "text-xs text-[#777777]"}>{">"}</Text>
                 </View>
-          )}
+              )}
             </For>
           </Show>
         </View>
       </View>
 
-      <Text class="h-[22] px-[9] pt-[4] text-xs text-[#666666]">Wheel browse · center open</Text>
+      <View class="h-[22] flex-row items-center justify-between px-[9]">
+        <Text class="text-xs text-[#666666]">Wheel · center open</Text>
+        <Show when={apps.length > 0}>
+          <Text class="text-xs text-[#666666]">{selected() + 1}/{apps.length}</Text>
+        </Show>
+      </View>
     </View>
   );
 }
