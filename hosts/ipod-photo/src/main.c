@@ -983,7 +983,7 @@ boot_apps:
                           boot_record.trial_hash_low,
                           boot_record.trial_hash_high, -1);
         }
-        if (!queued_package && !rollback && discovery_result == PJS_STORAGE_OK && catalog.count != 0u) {
+        if (!queued_package && !rollback && discovery_result == PJS_STORAGE_OK) {
             PjsStorageCatalog launcher_catalog = catalog;
             uint32_t retained_low = 0u;
             uint32_t retained_high = 0u;

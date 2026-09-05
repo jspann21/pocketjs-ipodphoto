@@ -2,6 +2,8 @@
 
 #include "panic.h"
 #include "cpu_idle.h"
+#include "app_store.h"
+#include "audio_pcm.h"
 
 #include <stddef.h>
 
@@ -202,6 +204,10 @@ static bool queue_status(PjsUsbProtocol *p, uint8_t request_type,
         response_type = PJS_USB_MSG_COMMIT_PACKAGE_REPLY; break;
     case PJS_USB_MSG_REBOOT:
         response_type = PJS_USB_MSG_REBOOT_REPLY; break;
+    case PJS_USB_MSG_APPS_LIST: response_type = PJS_USB_MSG_APPS_LIST_REPLY; break;
+    case PJS_USB_MSG_APP_INSTALL: response_type = PJS_USB_MSG_APP_INSTALL_REPLY; break;
+    case PJS_USB_MSG_APP_REMOVE: response_type = PJS_USB_MSG_APP_REMOVE_REPLY; break;
+    case PJS_USB_MSG_APP_LOAD: response_type = PJS_USB_MSG_APP_LOAD_REPLY; break;
     default: response_type = PJS_USB_MSG_ERROR; break;
     }
     return queue_frame(p, response_type, sequence, payload, 4u + extra_length);
@@ -358,7 +364,7 @@ static bool handle_frame(PjsUsbProtocol *p, const uint8_t *frame,
 
     if (p->config.observe_only && type != PJS_USB_MSG_HELLO &&
         type != PJS_USB_MSG_INFO && type != PJS_USB_MSG_STATUS &&
-        type != PJS_USB_MSG_ENTER_MAINTENANCE) {
+        type != PJS_USB_MSG_ENTER_MAINTENANCE && type != PJS_USB_MSG_APPS_LIST) {
         /* This gate precedes every command-specific mutation, including
          * upload buffer writes and STOP/RUN lifecycle calls. */
         return queue_status(p, type, sequence, PJS_USB_STATUS_BUSY, 0, 0u);
@@ -613,6 +619,67 @@ static bool handle_frame(PjsUsbProtocol *p, const uint8_t *frame,
         put_u32(extra, generation);
         return queue_status(p, type, sequence, PJS_USB_STATUS_OK,
                             extra, sizeof(extra));
+    }
+    case PJS_USB_MSG_APPS_LIST: {
+        if (payload_length != 0u || pjs_audio_pcm_busy())
+            return queue_status(p, type, sequence, PJS_USB_STATUS_BUSY, 0, 0u);
+        PjsStorageCatalog catalog;
+        int rc = pjs_storage_discover_apps(&catalog);
+        if (rc != 0) {
+            uint8_t error[4]; put_u32(error, (uint32_t)rc);
+            return queue_status(p, type, sequence, PJS_USB_STATUS_INTERNAL, error, 4u);
+        }
+        uint8_t entries[8u + PJS_STORAGE_MAX_APPS * 28u];
+        put_u32(entries, catalog.count);
+        put_u32(entries + 4u, PJS_APP_STORE_SLOTS);
+        for (uint32_t i = 0; i < catalog.count; ++i) {
+            uint8_t *entry = entries + 8u + i * 28u;
+            pjs_copy(entry, (const uint8_t *)catalog.apps[i].file_name, 11u);
+            uint32_t slot, state;
+            entry[11] = pjs_app_store_lookup(catalog.apps[i].file_name, &slot, &state) == 0 && state == 1u;
+            put_u32(entry + 12u, catalog.apps[i].size);
+            put_u32(entry + 16u, entry[11] ? slot : UINT32_MAX);
+            uint32_t low = 0u, high = 0u;
+            (void)pjs_app_store_hash(catalog.apps[i].file_name, &low, &high);
+            put_u32(entry + 20u, low); put_u32(entry + 24u, high);
+        }
+        return queue_status(p, type, sequence, PJS_USB_STATUS_OK, entries, 8u + catalog.count * 28u);
+    }
+    case PJS_USB_MSG_APP_INSTALL:
+    case PJS_USB_MSG_APP_REMOVE:
+    case PJS_USB_MSG_APP_LOAD: {
+        if (payload_length != 11u || !p->maintenance_active || p->runtime_active ||
+            p->runtime_boot_pending || p->upload_active || p->image_upload_active ||
+            pjs_audio_pcm_busy())
+            return queue_status(p, type, sequence, PJS_USB_STATUS_BUSY, 0, 0u);
+        int rc;
+        if (type == PJS_USB_MSG_APP_INSTALL) {
+            if (!p->package_valid || p->state != PJS_USB_STATE_READY)
+                return queue_status(p, type, sequence, PJS_USB_STATUS_NOT_READY, 0, 0u);
+            rc = pjs_app_store_install((const char *)payload, p->config.package_buffer,
+                                       p->uploaded_package_length, &p->guest);
+        } else if (type == PJS_USB_MSG_APP_REMOVE) {
+            rc = pjs_app_store_remove((const char *)payload);
+        } else {
+            PjsStorageFile file = {0};
+            rc = pjs_storage_load_app(&file, (const char *)payload);
+            if (rc == 0 && file.length > p->config.package_capacity) rc = PJS_STORAGE_ERR_TOO_LARGE;
+            if (rc == 0) {
+                p->package_valid = false;
+                pjs_copy(p->config.package_buffer, file.bytes, file.length);
+                p->uploaded_package_length = file.length;
+                p->package_crc = pjs_usb_protocol_crc32(p->config.package_buffer, file.length);
+                rc = pjs_package_open_ipod_photo(p->config.package_buffer, file.length, &p->guest);
+                p->package_valid = rc == 0;
+                p->package_error = (uint32_t)rc;
+                p->runtime_error = 0u;
+                p->state = rc == 0 ? PJS_USB_STATE_READY : PJS_USB_STATE_ERROR;
+            }
+            pjs_storage_release(&file);
+        }
+        uint8_t result[4]; put_u32(result, (uint32_t)rc);
+        return queue_status(p, type, sequence, rc == 0 ? PJS_USB_STATUS_OK :
+                            PJS_USB_STATUS_INTERNAL, result, 4u);
     }
     case PJS_USB_MSG_REBOOT: {
         if (payload_length != 0u || !p->maintenance_active ||

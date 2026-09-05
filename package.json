@@ -28,6 +28,7 @@
     "tools",
     "hosts/ipod-photo/tools/ipod_usb_runner.py",
     "hosts/ipod-photo/tools/ipod_usb_protocol.py",
+    "hosts/ipod-photo/tools/ipod_app_store_setup.py",
     "hosts/ipod-photo/tools/pack_ipod.py",
     "!tools/bench-desktop",
     "apps/hero/app.tsx",

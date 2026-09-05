@@ -1,4 +1,5 @@
 #include "qjs_runtime.h"
+#include "storage.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -35,7 +36,7 @@
 #define PJS_QJS_MALLOC_OVERHEAD 8u
 #define PJS_QJS_ROOT_ID 1
 #define PJS_QJS_HOST_ABI 1
-#define PJS_QJS_MAX_LAUNCHER_APPS 6u
+#define PJS_QJS_MAX_LAUNCHER_APPS PJS_STORAGE_MAX_APPS
 #define PJS_QJS_LAUNCHER_LABEL_BYTES 9u
 
 /* The A1099 input decoder intentionally uses a compact, device-local bit

@@ -57,7 +57,7 @@ EMBEDDED_PACKAGE_O := $(BUILD)/generated/embedded_package.o
 EMBEDDED_PACKAGE_STAMP := $(BUILD)/generated/.package-ready
 EMBEDDED_PACKAGE_DEP := $(EMBEDDED_POCKET_INPUT) $(LAUNCHER_POCKET_INPUT)
 EMBEDDED_PACKAGE_ARGS := --input-package $(EMBEDDED_POCKET_INPUT) --launcher-package $(LAUNCHER_POCKET_INPUT)
-SOURCES := src/audio.c src/audio_clock.c src/audio_dma.c src/audio_pcm.c src/audio_pcm_mixer.c src/backlight.c src/cache.c src/cpu_idle.c src/data_fs.c src/fat32.c src/fs_store.c src/heap.c src/input.c src/irq.c src/lcd.c src/libc_shim.c src/lineage_record.c src/main.c src/mem.c src/native_loader.c src/package_store.c src/panic.c src/power.c src/qjs_runtime.c src/scheduler.c src/state_record.c src/storage.c src/timer.c src/timer_irq.c src/usb_device.c src/usb_protocol.c
+SOURCES := src/app_store.c src/audio.c src/audio_clock.c src/audio_dma.c src/audio_pcm.c src/audio_pcm_mixer.c src/backlight.c src/cache.c src/cpu_idle.c src/data_fs.c src/fat32.c src/fs_store.c src/heap.c src/input.c src/irq.c src/lcd.c src/libc_shim.c src/lineage_record.c src/main.c src/mem.c src/native_loader.c src/package_store.c src/panic.c src/power.c src/qjs_runtime.c src/scheduler.c src/state_record.c src/storage.c src/timer.c src/timer_irq.c src/usb_device.c src/usb_protocol.c
 OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(SOURCES)) $(EMBEDDED_PACKAGE_O) \
            $(BUILD)/boot/crt0.o $(BUILD)/boot/audio-clock.o $(BUILD)/boot/usb-chainload.o
 DEPFILES := $(OBJECTS:.o=.d)

@@ -256,6 +256,8 @@ const targetBackends = {
       args: [...args],
       options: {
         run: { type: "boolean" },
+        install: { type: "boolean" },
+        name: { type: "string" },
         port: { type: "string" },
         repeat: { type: "string" },
         settle: { type: "string" },
@@ -263,7 +265,11 @@ const targetBackends = {
       strict: true,
       allowPositionals: false,
     });
-    if (!values.run && (values.port !== undefined || values.repeat !== undefined || values.settle !== undefined)) {
+    if (values.install && (!values.name || values.repeat !== undefined || values.settle !== undefined)) {
+      throw new Error("iPod Photo --install requires --name NAME; --repeat/--settle apply to RAM runs");
+    }
+    if (values.name !== undefined && !values.install) throw new Error("--name requires --install");
+    if (!values.run && !values.install && (values.port !== undefined || values.repeat !== undefined || values.settle !== undefined)) {
       throw new Error("iPod Photo --port, --repeat and --settle require --run");
     }
     // iPod photo uses the ordinary compiler output directly. Package the
@@ -283,7 +289,7 @@ const targetBackends = {
     const bytes = encodeTargetPackage({ manifest, plan, js, pak });
     await Bun.write(packagePath, bytes);
     console.log(`✓ iPod Photo package ready in ${packagePath} (${bytes.length}B)`);
-    if (values.run) {
+    if (values.run || values.install) {
       const pyLauncher = process.platform === "win32" ? Bun.which("py") : null;
       const python = pyLauncher ?? Bun.which("python3") ?? Bun.which("python");
       if (!python) throw new Error("iPod Photo USB runs require Python 3 and pyserial");
@@ -291,7 +297,10 @@ const targetBackends = {
         python,
         ...(pyLauncher ? ["-3"] : []),
         resolve(frameworkRoot, "hosts/ipod-photo/tools/ipod_usb_runner.py"),
-        "batch", "--batch-package", packagePath, "--maintenance-auto", "--noninteractive",
+        ...(values.install
+          ? ["install", "--package", packagePath, "--name", values.name!, ...(values.run ? ["--launch"] : [])]
+          : ["batch", "--batch-package", packagePath, "--maintenance-auto"]),
+        "--noninteractive",
         ...(["port", "repeat", "settle"] as const).flatMap((name) =>
           values[name] !== undefined ? [`--${name}`, values[name]!] : []),
       ], "iPod Photo USB run");

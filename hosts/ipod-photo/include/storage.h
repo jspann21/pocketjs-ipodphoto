@@ -11,7 +11,7 @@
 #define PJS_STORAGE_MAX_FILE_SECTORS 136u
 #define PJS_STORAGE_MAX_BOUNDED_FILE_SECTORS 8192u
 #define PJS_STORAGE_MAX_FILE_BYTES (8u * 1024u * 1024u)
-#define PJS_STORAGE_MAX_APPS 6u
+#define PJS_STORAGE_MAX_APPS 32u
 
 #define PJS_STORAGE_OK 0
 #define PJS_STORAGE_ERR_ARGUMENT -1
@@ -100,6 +100,11 @@ typedef struct {
     PjsStorageApp apps[PJS_STORAGE_MAX_APPS];
     uint32_t count;
 } PjsStorageCatalog;
+
+/* Slots 0..7 are package pairs; slot 8 is the catalog pair. */
+int pjs_storage_app_pair(uint32_t slot, bool writable,
+                         const PjsPackageStoreIo **io);
+int pjs_storage_load_legacy_app(PjsStorageFile *file, const char name[11]);
 
 typedef struct {
     uint32_t available;

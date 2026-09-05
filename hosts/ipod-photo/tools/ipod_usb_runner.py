@@ -40,6 +40,16 @@ class PromptRequired(RuntimeError):
     pass
 
 
+APPS_LIST, APP_INSTALL, APP_REMOVE, APP_LOAD = 0x27, 0x28, 0x29, 0x2a
+
+
+def app_name(value: str) -> bytes:
+    name = value.upper().removesuffix(".PKT")
+    if not re.fullmatch(r"[A-Z0-9_-]{1,8}", name):
+        raise ValueError("app name must contain 1–8 letters, digits, underscores or hyphens")
+    return name.ljust(8).encode("ascii") + b"PKT"
+
+
 def _hex(value: int) -> str:
     return f"0x{value:08x}"
 
@@ -167,6 +177,54 @@ class IpodRunner:
     def request(self, msg_type: int, payload: bytes = b"", expected: Optional[int] = None, timeout: float = 5.0) -> Frame:  # type: ignore[name-defined]
         assert self.transport is not None
         return self.transport.request(msg_type, payload, timeout, expected)
+
+    def list_apps(self) -> list[Dict[str, Any]]:
+        _, data = status_payload(self.request(APPS_LIST, expected=0xa7, timeout=60.0))
+        if len(data) < 8 or len(data) != 8 + u32(data) * 28:
+            raise ProtocolError("invalid app catalog reply")
+        apps = []
+        for index in range(u32(data)):
+            entry = data[8 + index * 28:36 + index * 28]
+            apps.append({"name": entry[:8].decode("ascii").rstrip(),
+                         "managed": bool(entry[11]), "bytes": u32(entry, 12),
+                         "slot": u32(entry, 16) if entry[11] else None,
+                         "hash_low": u32(entry, 20), "hash_high": u32(entry, 24)})
+        self.emit({"type": "apps", "managed_capacity": u32(data, 4), "apps": apps})
+        return apps
+
+    def manage_app(self, command: str) -> None:
+        assert self.transport is not None
+        name = app_name(self.args.name)
+        if self.transport.package_capacity < 4 * 1024 * 1024:
+            self.enter_maintenance()
+        self.request(STOP, timeout=10.0)
+        if command == "install":
+            self.upload_package(Path(self.args.package))
+            expected = self.transport.info(self.args.handshake_timeout)
+            self.request(APP_INSTALL, name, 0xa8, timeout=120.0)
+            apps = self.list_apps()
+            if not any(a["name"] == name[:8].decode().rstrip() and a["managed"] and
+                       a["hash_low"] == expected["package_hash_low"] and
+                       a["hash_high"] == expected["package_hash_high"] for a in apps):
+                raise ProtocolError("installed package identity missing from catalog")
+        elif command == "remove":
+            self.request(APP_REMOVE, name, 0xa9, timeout=120.0)
+            if any(a["name"] == name[:8].decode().rstrip() for a in self.list_apps()):
+                raise ProtocolError("removed app is still listed")
+        if command == "launch" or (command == "install" and self.args.launch):
+            # Read the durable package back through the firmware's app loader.
+            self.request(APP_LOAD, name, 0xaa, timeout=120.0)
+            admitted = self.transport.info(self.args.handshake_timeout)
+            self.request(RUN, timeout=5.0)
+            info = self.wait_for_runtime(max(5.0, self.args.boot_timeout))
+            if any(info[key] != admitted[key] for key in
+                   ("package_length", "package_crc", "package_hash_low", "package_hash_high")):
+                raise ProtocolError("launched package identity changed")
+            self.emit({"type": "app", "operation": "launch", "name": self.args.name,
+                       "status": "running", "info": info})
+        else:
+            self.reboot()
+        self.emit({"type": "app", "operation": command, "name": self.args.name, "status": "pass"})
 
     def upload_bytes(self, payload: bytes, begin_type: int = UPLOAD_BEGIN, data_type: int = UPLOAD_DATA,
                      end_type: int = UPLOAD_END, begin_reply: int = UPLOAD_REPLY,
@@ -575,6 +633,12 @@ class IpodRunner:
             return 0
         if command == "batch":
             return self.batch()
+        if command == "apps":
+            self.list_apps()
+            return 0
+        if command in ("install", "remove", "launch"):
+            self.manage_app(command)
+            return 0
         if command == "info":
             info = self.transport.info(self.args.handshake_timeout)  # type: ignore[union-attr]
             self.emit({**info, "state": _state(info["state"])})
@@ -644,7 +708,7 @@ def resolve_port(explicit: Optional[str], baud: int, timeout: float) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="PocketJS iPod Photo binary PJSU USB runner")
-    p.add_argument("command", choices=("discover", "info", "status", "upload", "run", "stop", "watch", "maintenance", "commit", "reboot", "chainload", "flash", "cycle", "batch"))
+    p.add_argument("command", choices=("discover", "info", "status", "upload", "run", "stop", "watch", "maintenance", "commit", "reboot", "chainload", "flash", "cycle", "batch", "apps", "install", "remove", "launch"))
     p.add_argument("--port", help="serial port (Windows COM7, macOS /dev/cu.*, Linux /dev/ttyACM0)")
     p.add_argument("--baud", type=int, default=DEFAULT_BAUD)
     p.add_argument("--timeout", type=float, default=1.0)
@@ -664,6 +728,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--package", help=".pocket/APP.PKT payload for upload or run")
     p.add_argument("--chunk-size", type=int, default=0,
                    help="maximum DATA bytes per request; 0 uses the negotiated limit")
+    p.add_argument("--name", help="persistent app name (1-8 characters)")
+    p.add_argument("--launch", action="store_true", help="launch the installed app from storage")
     p.add_argument("--image", help="native .ipod image for chainload/flash")
     p.add_argument("--no-watch", action="store_true")
     p.add_argument("--watch-timeout", type=float, default=None)
@@ -692,6 +758,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     if args.command in ("upload", "cycle") and args.package is None:
         build_parser().error(f"{args.command} requires --package PATH")
+    if args.command in ("install", "remove", "launch") and not args.name:
+        build_parser().error("app management requires --name NAME")
+    if args.command == "install" and not args.package:
+        build_parser().error("install requires --package PATH")
     if args.command in ("chainload", "flash") and args.image is None:
         build_parser().error(f"{args.command} requires --image PATH")
     if args.command == "batch":

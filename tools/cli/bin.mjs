@@ -441,6 +441,33 @@ function manifestCommand(cmd, args) {
   process.exit(r.status ?? 1);
 }
 
+function appsCommand(args) {
+  const root = findCheckout() ?? findFrameworkInstallation();
+  const [action, value, ...remaining] = args;
+  const launcher = platform() === "win32" ? which("py") : null;
+  const python = launcher || which("python3") || which("python");
+  if (!python || !root) {
+    console.error(C.bad("PocketJS checkout/package and Python 3 are required"));
+    process.exit(1);
+  }
+  let forwarded;
+  if (action === "setup") {
+    forwarded = [join(root, "hosts/ipod-photo/tools/ipod_app_store_setup.py"), ...args.slice(1)];
+  } else {
+    let command;
+    if (action === "list") command = ["apps", ...args.slice(1)];
+    else if (action === "install" && value) command = ["install", "--package", value, ...remaining];
+    else if (["remove", "launch"].includes(action) && value) command = [action, "--name", value, ...remaining];
+    else {
+      console.error(C.bad("usage: pocket apps list | install <package> --name NAME | remove NAME | launch NAME | setup --volume PATH"));
+      process.exit(1);
+    }
+    forwarded = [join(root, "hosts/ipod-photo/tools/ipod_usb_runner.py"), ...command, "--noninteractive"];
+  }
+  const result = spawnSync(python, [...(launcher ? ["-3"] : []), ...forwarded], {stdio: "inherit"});
+  process.exit(result.status ?? 1);
+}
+
 function passthrough(cmd, args) {
   passthroughScript(cmd, SCRIPTS[cmd], args);
 }
@@ -470,6 +497,7 @@ const HELP = `${C.bold("pocket")} — the PocketJS toolchain CLI
   pocket setup [--yes]     install what doctor found missing
   pocket create <name> [--target ipod-photo]
                            scaffold a pocket.json v2 app under apps/<name>
+  pocket apps <command>     list, install, remove, or launch iPod Photo apps
   pocket check --target T  validate pocket.json, target APIs and app types
   pocket check --host-profile FILE
                            validate against an ESP-IDF product host
@@ -500,6 +528,9 @@ switch (cmd) {
     break;
   case "create":
     create(rest[0], rest.slice(1));
+    break;
+  case "apps":
+    appsCommand(rest);
     break;
   case "check":
   case "compile":

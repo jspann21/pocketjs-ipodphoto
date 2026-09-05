@@ -1,4 +1,5 @@
 #include "storage.h"
+#include "app_store.h"
 
 #include <stdint.h>
 
@@ -912,6 +913,8 @@ int pjs_storage_discover_apps(PjsStorageCatalog *catalog)
         ++write;
     }
     catalog->count = write;
+    rc = pjs_app_store_merge(catalog);
+    if (rc != PJS_STORAGE_OK) goto failed;
     for (uint32_t end = catalog->count; end > 1u; --end) {
         for (uint32_t index = 1u; index < end; ++index) {
             if (compare_app_names(&catalog->apps[index - 1u],
@@ -929,6 +932,20 @@ failed:
 }
 
 int pjs_storage_load_app(PjsStorageFile *file, const char file_name[11])
+{
+    if (!file || !file_name || !app_name_valid(file_name)) return PJS_STORAGE_ERR_ARGUMENT;
+    *file = (PjsStorageFile){0};
+    uint32_t slot, state;
+    int rc = pjs_app_store_lookup(file_name, &slot, &state);
+    if (rc == PJS_STORAGE_OK) {
+        if (state != 1u) return PJS_STORAGE_ERR_NOT_FOUND;
+        return pjs_app_store_load(file_name, file);
+    }
+    if (rc != PJS_STORAGE_ERR_NOT_FOUND) return rc;
+    return pjs_storage_load_legacy_app(file, file_name);
+}
+
+int pjs_storage_load_legacy_app(PjsStorageFile *file, const char file_name[11])
 {
     if (file == 0 || file_name == 0 || !app_name_valid(file_name)) {
         return PJS_STORAGE_ERR_ARGUMENT;
@@ -974,7 +991,7 @@ int pjs_storage_load_app(PjsStorageFile *file, const char file_name[11])
     return PJS_STORAGE_OK;
 
 failed:
-    storage_error = (uint32_t)(-rc);
+    if (rc != PJS_STORAGE_ERR_NOT_FOUND) storage_error = (uint32_t)(-rc);
     return rc;
 }
 
@@ -1028,6 +1045,7 @@ uint32_t pjs_storage_failed_error(void)
 static void package_heap_sift_down(uint32_t values[], uint32_t count,
                                    uint32_t root)
 {
+    if (count < 2u) return;
     while (root <= (count - 2u) / 2u) {
         uint32_t child = root * 2u + 1u;
         if (child + 1u < count && values[child] < values[child + 1u]) ++child;
@@ -1435,4 +1453,103 @@ int pjs_storage_resolve_short_file(void *context, const char file_name[11],
     return pjs_fat32_short_file_sectors(
         &fat, directory, file_name,
         expected_sectors * PJS_STORAGE_SECTOR_BYTES, lba_out);
+}
+
+/* Managed files are allocated by the host while FAT is mounted by Windows.
+ * Native operations change only resolved data sectors, never FAT metadata. */
+static uint32_t app_pair_lbas[2][PJS_PACKAGE_STORE_BANK_SECTORS];
+static uint32_t app_pair_sectors;
+static bool app_pair_writable;
+
+static void app_pair_name(uint32_t slot, uint32_t bank, char name[11])
+{
+    static const char base[11] = {'A','P','P','0','0','A',' ',' ','B','I','N'};
+    for (uint32_t i = 0; i < 11u; ++i) name[i] = base[i];
+    if (slot == PJS_APP_STORE_INDEX_SLOT) {
+        name[3] = 'I'; name[4] = 'D'; name[5] = 'X'; name[6] = (char)('0' + bank);
+    } else {
+        name[3] = (char)('0' + slot / 10u); name[4] = (char)('0' + slot % 10u);
+        name[5] = (char)('A' + bank);
+    }
+}
+
+static bool app_pair_read(void *context, uint32_t bank, uint32_t sector, uint8_t bytes[512])
+{
+    (void)context;
+    return bank < 2u && sector < app_pair_sectors &&
+        pjs_storage_sector_read(0, app_pair_lbas[bank][sector], bytes);
+}
+static bool app_pair_write(void *context, uint32_t bank, uint32_t sector, const uint8_t bytes[512])
+{
+    (void)context;
+    return app_pair_writable && bank < 2u && sector < app_pair_sectors &&
+        pjs_storage_sector_write(0, app_pair_lbas[bank][sector], bytes);
+}
+static bool app_pair_flush(void *context, uint32_t bank)
+{
+    (void)context;
+    return app_pair_writable && bank < 2u && pjs_storage_sector_flush(0);
+}
+static const PjsPackageStoreIo app_pair_io = {
+    .read = app_pair_read, .write = app_pair_write, .flush = app_pair_flush,
+};
+
+int pjs_storage_app_pair(uint32_t slot, bool writable, const PjsPackageStoreIo **io)
+{
+    app_pair_sectors = 0u;
+    app_pair_writable = false;
+    if (slot > PJS_APP_STORE_INDEX_SLOT || !io) return PJS_STORAGE_ERR_ARGUMENT;
+    ata_prepare();
+    PjsFat32 fat = {0};
+    int rc = pjs_fat32_mount(&fat, ata_read_sector, 0);
+    if (rc != 0) return rc;
+    uint32_t directory;
+    rc = pjs_fat32_find_short_directory(&fat, fat.root_cluster, guest_directory, &directory);
+    if (rc != 0) return rc;
+    uint32_t sectors = slot == PJS_APP_STORE_INDEX_SLOT ?
+        PJS_APP_STORE_INDEX_BYTES / 512u : PJS_PACKAGE_STORE_BANK_SECTORS;
+    for (uint32_t bank = 0; bank < 2u; ++bank) {
+        char name[11];
+        app_pair_name(slot, bank, name);
+        rc = package_resolve_at(&fat, directory, name, sectors * 512u, app_pair_lbas[bank]);
+        if (rc != 0) return rc;
+        if (!writable) continue;
+        /* Reuse the package-store verification workspace. Its map is not
+         * the managed I/O map and no mounted legacy bank is redirected. */
+        for (uint32_t i = 0; i < PJS_PACKAGE_STORE_BANK_SECTORS; ++i)
+            package_bank_sorted[bank][i] = i < sectors ? app_pair_lbas[bank][i] : UINT32_MAX;
+        package_sort_lbas(package_bank_sorted[bank], PJS_PACKAGE_STORE_BANK_SECTORS);
+        for (uint32_t i = 1; i < sectors; ++i)
+            if (package_bank_sorted[bank][i] == package_bank_sorted[bank][i - 1u])
+                return PJS_STORAGE_ERR_VERIFY;
+    }
+    if (writable) {
+        for (uint32_t i = 0; i < sectors; ++i)
+            if (package_lba_contains(package_bank_sorted[0], sectors, package_bank_sorted[1][i]))
+                return PJS_STORAGE_ERR_VERIFY;
+        rc = package_validate_protected(&fat, directory);
+        if (rc != 0) return rc;
+        for (uint32_t other = 0; other <= PJS_APP_STORE_INDEX_SLOT; ++other) {
+            if (other == slot) continue;
+            for (uint32_t bank = 0; bank < 2u; ++bank) {
+                char name[11]; app_pair_name(other, bank, name);
+                rc = package_protect_chain(&fat, directory, name,
+                    other == PJS_APP_STORE_INDEX_SLOT ? PJS_APP_STORE_INDEX_BYTES :
+                    PJS_PACKAGE_STORE_BANK_SECTORS * 512u, false);
+                if (rc != 0) return rc;
+            }
+        }
+        static const char legacy_banks[2][11] = {
+            {'P','K','G','B','A','N','K','0','B','I','N'},
+            {'P','K','G','B','A','N','K','1','B','I','N'},
+        };
+        for (uint32_t bank = 0; bank < 2u; ++bank) {
+            rc = package_protect_named(&fat, directory, legacy_banks[bank], true);
+            if (rc != 0) return rc;
+        }
+    }
+    app_pair_sectors = sectors;
+    app_pair_writable = writable;
+    *io = &app_pair_io;
+    return 0;
 }
