@@ -310,5 +310,9 @@
   },
   "trustedDependencies": [
     "@parcel/watcher"
-  ]
+  ],
+  "overrides": {
+    "browserslist": "4.28.9",
+    "nanoid": "3.3.18"
+  }
 }
