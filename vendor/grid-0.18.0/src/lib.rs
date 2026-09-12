@@ -1696,8 +1696,9 @@ impl<T: Default> Grid<T> {
     /// This method will be significantly slower if the grid uses a row-major memory layout.
     pub fn expand_cols(&mut self, cols: usize) {
         if cols > 0 && self.rows > 0 {
-            self.data
-                .resize_with(self.data.len() + cols * self.rows, T::default);
+            let new_cols = Self::safe_add(self.cols, cols);
+            let new_len = Self::safe_multiply(self.rows, new_cols);
+            self.data.resize_with(new_len, T::default);
 
             if self.order == Order::RowMajor {
                 for col_added in 0..cols {
@@ -1708,7 +1709,7 @@ impl<T: Default> Grid<T> {
                     }
                 }
             }
-            self.cols += cols;
+            self.cols = new_cols;
         }
     }
 }

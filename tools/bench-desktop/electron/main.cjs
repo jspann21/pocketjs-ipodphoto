@@ -15,7 +15,7 @@ app.whenReady().then(() => {
     title: "Bench Note",
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
-  win.webContents.on("console-message", (_e, _level, message) => {
+  win.webContents.on("console-message", ({ message }) => {
     if (message.startsWith("READY") || message.startsWith("STORM-DONE")) {
       process.stdout.write(message + "\n");
     }
