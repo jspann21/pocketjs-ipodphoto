@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "main": "main.cjs",
   "devDependencies": {
-    "electron": "^43.2.0"
+    "electron": "43.8.1"
+  },
+  "overrides": {
+    "undici": "7.30.1"
   }
 }
